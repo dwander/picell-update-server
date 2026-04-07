@@ -7,16 +7,33 @@ interface RecordDownloadParams {
   platform: string;
   ip?: string | undefined;
   userAgent?: string | undefined;
+  machineId?: string | undefined;
 }
 
-/** 다운로드 기록 저장 */
+/** 다운로드 기록 저장 (같은 PC + 같은 버전이면 중복 카운트하지 않음) */
 export function recordDownload(params: RecordDownloadParams): void {
+  if (params.machineId) {
+    const existing = db
+      .select({ id: downloads.id })
+      .from(downloads)
+      .where(
+        and(
+          eq(downloads.version, params.version),
+          eq(downloads.machineId, params.machineId)
+        )
+      )
+      .get();
+
+    if (existing) return;
+  }
+
   db.insert(downloads)
     .values({
       version: params.version,
       platform: params.platform,
       ip: params.ip || null,
       userAgent: params.userAgent || null,
+      machineId: params.machineId || null,
     })
     .run();
 }

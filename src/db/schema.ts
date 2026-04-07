@@ -6,6 +6,7 @@ export const downloads = sqliteTable("downloads", {
   platform: text("platform").notNull(),
   ip: text("ip"),
   userAgent: text("user_agent"),
+  machineId: text("machine_id"),
   downloadedAt: integer("downloaded_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),

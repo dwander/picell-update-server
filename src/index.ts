@@ -29,9 +29,17 @@ function initDb(): void {
       platform TEXT NOT NULL,
       ip TEXT,
       user_agent TEXT,
+      machine_id TEXT,
       downloaded_at INTEGER NOT NULL DEFAULT (unixepoch())
     )
   `);
+
+  // 기존 테이블에 machine_id 컬럼이 없으면 추가
+  try {
+    db.run(sql`ALTER TABLE downloads ADD COLUMN machine_id TEXT`);
+  } catch {
+    // 이미 컬럼이 존재하면 무시
+  }
 }
 
 const PORT = Number(process.env.PORT) || 3000;

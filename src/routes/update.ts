@@ -71,6 +71,7 @@ updateRouter.get("/download/:platform", async (c) => {
       platform,
       ip: c.req.header("x-forwarded-for") || c.req.header("x-real-ip"),
       userAgent: c.req.header("user-agent"),
+      machineId: c.req.query("machineId"),
     });
 
     return c.redirect(asset.url, 302);
