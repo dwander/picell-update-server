@@ -5,8 +5,8 @@ import { sql, eq, and, desc } from "drizzle-orm";
 interface RecordDownloadParams {
   version: string;
   platform: string;
-  ip?: string;
-  userAgent?: string;
+  ip?: string | undefined;
+  userAgent?: string | undefined;
 }
 
 /** 다운로드 기록 저장 */
