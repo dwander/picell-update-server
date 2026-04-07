@@ -40,4 +40,5 @@ initDb();
 
 serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`PiCell Update Server running on http://localhost:${info.port}`);
+  console.log(`STATS_PASSWORD configured: ${!!process.env.STATS_PASSWORD}`);
 });
