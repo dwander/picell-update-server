@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { basicAuth } from "hono/basic-auth";
 import {
   getTotalDownloads,
   getDownloadsByVersion,
@@ -7,6 +8,17 @@ import {
 } from "../services/stats.js";
 
 export const statsRouter = new Hono();
+
+const STATS_PASSWORD = process.env.STATS_PASSWORD;
+
+/** 통계 엔드포인트 접근 제한 */
+if (STATS_PASSWORD) {
+  statsRouter.use("/stats", basicAuth({ username: "admin", password: STATS_PASSWORD }));
+  statsRouter.use("/api/stats", basicAuth({ username: "admin", password: STATS_PASSWORD }));
+} else {
+  statsRouter.use("/stats", async (c) => c.text("STATS_PASSWORD not configured", 403));
+  statsRouter.use("/api/stats", async (c) => c.text("STATS_PASSWORD not configured", 403));
+}
 
 /** GET /api/stats — 통계 JSON */
 statsRouter.get("/api/stats", (c) => {
