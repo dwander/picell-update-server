@@ -13,7 +13,7 @@ export const updateRouter = new Hono();
  */
 updateRouter.get("/check", async (c) => {
   const platform = c.req.query("platform") as Platform | undefined;
-  const currentVersion = c.req.query("version");
+  const currentVersion = c.req.query("version")?.replace(/^v/, "");
 
   if (!platform || !VALID_PLATFORMS.includes(platform)) {
     return c.json({ error: "Invalid platform" }, 400);
