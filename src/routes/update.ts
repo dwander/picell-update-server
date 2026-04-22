@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { getLatestRelease } from "../services/github.js";
+import { getLatestRelease, getLatestBetaRelease } from "../services/github.js";
 import { recordDownload } from "../services/stats.js";
 import type { Platform } from "../types.js";
 
@@ -14,6 +14,7 @@ export const updateRouter = new Hono();
 updateRouter.get("/check", async (c) => {
   const platform = c.req.query("platform") as Platform | undefined;
   const currentVersion = c.req.query("version")?.replace(/^v/, "");
+  const channel = c.req.query("channel") === "beta" ? "beta" : "stable";
 
   if (!platform || !VALID_PLATFORMS.includes(platform)) {
     return c.json({ error: "Invalid platform" }, 400);
@@ -23,21 +24,29 @@ updateRouter.get("/check", async (c) => {
   }
 
   try {
-    const latest = await getLatestRelease();
+    const latest =
+      channel === "beta"
+        ? await getLatestBetaRelease()
+        : await getLatestRelease();
+
+    if (!latest) {
+      return c.json({ error: "No beta release found" }, 404);
+    }
+
     const asset = latest.assets[platform];
     const updateAvailable =
       !!asset && compareVersions(latest.version, currentVersion) > 0;
 
     return c.json({
       updateAvailable,
+      channel,
       latest: {
         version: latest.version,
         name: latest.name,
         notes: latest.notes,
         publishedAt: latest.publishedAt,
-        downloadUrl: asset
-          ? `/update/download/${platform}`
-          : null,
+        prerelease: latest.prerelease,
+        downloadUrl: asset ? `/update/download/${platform}?channel=${channel}` : null,
         fileSize: asset?.size ?? null,
       },
     });
@@ -53,13 +62,22 @@ updateRouter.get("/check", async (c) => {
  */
 updateRouter.get("/download/:platform", async (c) => {
   const platform = c.req.param("platform") as Platform;
+  const channel = c.req.query("channel") === "beta" ? "beta" : "stable";
 
   if (!VALID_PLATFORMS.includes(platform)) {
     return c.json({ error: "Invalid platform" }, 400);
   }
 
   try {
-    const latest = await getLatestRelease();
+    const latest =
+      channel === "beta"
+        ? await getLatestBetaRelease()
+        : await getLatestRelease();
+
+    if (!latest) {
+      return c.json({ error: "No beta release found" }, 404);
+    }
+
     const asset = latest.assets[platform];
 
     if (!asset) {

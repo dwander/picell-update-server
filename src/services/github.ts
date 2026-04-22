@@ -13,6 +13,8 @@ const PLATFORM_PATTERNS: Record<Platform, RegExp> = {
 
 let cachedRelease: ReleaseInfo | null = null;
 let cachedAt = 0;
+let cachedBetaRelease: ReleaseInfo | null = null;
+let cachedBetaAt = 0;
 
 function apiHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
@@ -34,6 +36,18 @@ async function fetchLatestRelease(): Promise<GitHubRelease> {
   }
 
   return (await res.json()) as GitHubRelease;
+}
+
+async function fetchLatestPreRelease(): Promise<GitHubRelease | null> {
+  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases?per_page=10`;
+  const res = await fetch(url, { headers: apiHeaders() });
+
+  if (!res.ok) {
+    throw new Error(`GitHub API error: ${res.status} ${res.statusText}`);
+  }
+
+  const releases = (await res.json()) as GitHubRelease[];
+  return releases.find((r) => r.prerelease) ?? null;
 }
 
 function parseVersion(tagName: string): string {
@@ -70,11 +84,12 @@ function toReleaseInfo(release: GitHubRelease): ReleaseInfo {
     name: release.name || release.tag_name,
     notes: release.body || "",
     publishedAt: release.published_at,
+    prerelease: release.prerelease,
     assets: assetMap,
   };
 }
 
-/** 최신 릴리즈 정보 (캐싱 적용) */
+/** 최신 안정 릴리즈 정보 (캐싱 적용) */
 export async function getLatestRelease(): Promise<ReleaseInfo> {
   const now = Date.now();
 
@@ -89,8 +104,25 @@ export async function getLatestRelease(): Promise<ReleaseInfo> {
   return cachedRelease;
 }
 
+/** 최신 베타(pre-release) 릴리즈 정보 (캐싱 적용) */
+export async function getLatestBetaRelease(): Promise<ReleaseInfo | null> {
+  const now = Date.now();
+
+  if (cachedBetaRelease && now - cachedBetaAt < CACHE_TTL_MS) {
+    return cachedBetaRelease;
+  }
+
+  const release = await fetchLatestPreRelease();
+  cachedBetaRelease = release ? toReleaseInfo(release) : null;
+  cachedBetaAt = now;
+
+  return cachedBetaRelease;
+}
+
 /** 캐시 강제 무효화 */
 export function invalidateCache(): void {
   cachedRelease = null;
   cachedAt = 0;
+  cachedBetaRelease = null;
+  cachedBetaAt = 0;
 }

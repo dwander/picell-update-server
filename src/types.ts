@@ -19,6 +19,7 @@ export interface ReleaseInfo {
   name: string;
   notes: string;
   publishedAt: string;
+  prerelease: boolean;
   assets: Record<string, AssetInfo>;
 }
 
