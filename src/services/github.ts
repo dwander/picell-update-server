@@ -55,6 +55,18 @@ function parseVersion(tagName: string): string {
   return tagName.replace(/^v/, "");
 }
 
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const na = pa[i] ?? 0;
+    const nb = pb[i] ?? 0;
+    if (na !== nb) return na - nb;
+  }
+  return 0;
+}
+
 function matchAsset(
   assets: GitHubRelease["assets"],
   platform: Platform
@@ -105,7 +117,8 @@ export async function getLatestRelease(): Promise<ReleaseInfo> {
   return cachedRelease;
 }
 
-/** 최신 베타(pre-release) 릴리즈 정보 (캐싱 적용) */
+/** 최신 베타(pre-release) 릴리즈 정보 (캐싱 적용)
+ *  안정 버전이 베타보다 높으면 안정 버전을 반환 */
 export async function getLatestBetaRelease(): Promise<ReleaseInfo | null> {
   const now = Date.now();
 
@@ -113,8 +126,19 @@ export async function getLatestBetaRelease(): Promise<ReleaseInfo | null> {
     return cachedBetaRelease;
   }
 
-  const release = await fetchLatestPreRelease();
-  cachedBetaRelease = release ? toReleaseInfo(release) : null;
+  const [betaRelease, stableRelease] = await Promise.all([
+    fetchLatestPreRelease(),
+    fetchLatestRelease(),
+  ]);
+
+  const beta = betaRelease ? toReleaseInfo(betaRelease) : null;
+  const stable = toReleaseInfo(stableRelease);
+
+  // 베타가 없거나 안정 버전이 더 높으면 안정 버전 반환
+  const result =
+    !beta || compareVersions(stable.version, beta.version) > 0 ? stable : beta;
+
+  cachedBetaRelease = result;
   cachedBetaAt = now;
 
   return cachedBetaRelease;

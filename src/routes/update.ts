@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { getLatestRelease, getLatestBetaRelease } from "../services/github.js";
+import { getLatestRelease, getLatestBetaRelease, compareVersions } from "../services/github.js";
 import { recordDownload } from "../services/stats.js";
 import type { Platform } from "../types.js";
 
@@ -99,16 +99,3 @@ updateRouter.get("/download/:platform", async (c) => {
   }
 });
 
-/** 시맨틱 버전 비교: a > b → 양수, a < b → 음수, a == b → 0 */
-function compareVersions(a: string, b: string): number {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  const len = Math.max(pa.length, pb.length);
-
-  for (let i = 0; i < len; i++) {
-    const na = pa[i] ?? 0;
-    const nb = pb[i] ?? 0;
-    if (na !== nb) return na - nb;
-  }
-  return 0;
-}
