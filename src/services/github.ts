@@ -39,7 +39,8 @@ async function fetchLatestRelease(): Promise<GitHubRelease> {
 }
 
 async function fetchLatestPreRelease(): Promise<GitHubRelease | null> {
-  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases?per_page=10`;
+  // per_page=100으로 충분히 가져와 정식 릴리즈가 많이 쌓여도 베타를 놓치지 않도록 함
+  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases?per_page=100`;
   const res = await fetch(url, { headers: apiHeaders() });
 
   if (!res.ok) {
