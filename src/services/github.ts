@@ -5,6 +5,7 @@ const GITHUB_REPO = process.env.GITHUB_REPO || "picell-releases";
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
 
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5분
+const FETCH_TIMEOUT_MS = 8_000; // GitHub API 요청 타임아웃
 
 /** 플랫폼별 에셋 파일 패턴 */
 const PLATFORM_PATTERNS: Record<Platform, RegExp> = {
@@ -27,9 +28,19 @@ function apiHeaders(): Record<string, string> {
   return headers;
 }
 
+async function fetchWithTimeout(url: string): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { headers: apiHeaders(), signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchLatestRelease(): Promise<GitHubRelease> {
   const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
-  const res = await fetch(url, { headers: apiHeaders() });
+  const res = await fetchWithTimeout(url);
 
   if (!res.ok) {
     throw new Error(`GitHub API error: ${res.status} ${res.statusText}`);
@@ -41,7 +52,7 @@ async function fetchLatestRelease(): Promise<GitHubRelease> {
 async function fetchLatestPreRelease(): Promise<GitHubRelease | null> {
   // per_page=100으로 충분히 가져와 정식 릴리즈가 많이 쌓여도 베타를 놓치지 않도록 함
   const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases?per_page=100`;
-  const res = await fetch(url, { headers: apiHeaders() });
+  const res = await fetchWithTimeout(url);
 
   if (!res.ok) {
     throw new Error(`GitHub API error: ${res.status} ${res.statusText}`);

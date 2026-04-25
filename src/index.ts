@@ -6,6 +6,13 @@ import { statsRouter } from "./routes/stats.js";
 import { db } from "./db/index.js";
 import { sql } from "drizzle-orm";
 
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException]", err);
+});
+
 const app = new Hono();
 
 // 미들웨어
@@ -46,6 +53,15 @@ const PORT = Number(process.env.PORT) || 3000;
 
 initDb();
 
-serve({ fetch: app.fetch, port: PORT }, (info) => {
+const server = serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`PiCell Update Server running on http://localhost:${info.port}`);
 });
+
+function shutdown(signal: string): void {
+  console.log(`[${signal}] graceful shutdown`);
+  server.close(() => process.exit(0));
+  // 강제 종료 fallback (10초 후)
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
