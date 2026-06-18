@@ -9,7 +9,7 @@ GitHub Releases 기반 자동 업데이트 서버입니다. 클라이언트가 �
 | `PORT` | `3000` | 서버 포트 |
 | `GITHUB_OWNER` | `dwander` | GitHub 사용자명 또는 조직명 |
 | `GITHUB_REPO` | `picell-releases` | 릴리즈가 올라오는 저장소명 |
-| `GITHUB_TOKEN` | (없음) | GitHub Personal Access Token (rate limit 방지용, 선택) |
+| `GITHUB_TOKEN` | (없음) | GitHub Personal Access Token. **프로덕션 필수** — 미설정 시 GitHub API가 IP당 60회/시간으로 제한되어 모든 사용자의 업데이트 검사가 403→502로 실패할 수 있음. 토큰 설정 시 5,000회/시간 |
 | `STATS_PASSWORD` | (없음) | 통계 대시보드 접근 비밀번호 (미설정 시 통계 비활성화) |
 | `DB_PATH` | `data.db` | SQLite 데이터베이스 파일 경로 |
 

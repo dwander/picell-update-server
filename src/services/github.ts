@@ -6,6 +6,7 @@ const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
 
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5분
 const FETCH_TIMEOUT_MS = 8_000; // GitHub API 요청 타임아웃
+const STALE_RETRY_MS = 30 * 1000; // 페치 실패 후 GitHub 재시도 보류 간격
 
 /** 플랫폼별 에셋 파일 패턴 */
 const PLATFORM_PATTERNS: Record<Platform, RegExp> = {
@@ -121,11 +122,21 @@ export async function getLatestRelease(): Promise<ReleaseInfo> {
     return cachedRelease;
   }
 
-  const release = await fetchLatestRelease();
-  cachedRelease = toReleaseInfo(release);
-  cachedAt = now;
-
-  return cachedRelease;
+  try {
+    const release = await fetchLatestRelease();
+    cachedRelease = toReleaseInfo(release);
+    cachedAt = now;
+    return cachedRelease;
+  } catch (e) {
+    // GitHub 호출 실패(레이트 리밋 등) — 만료된 캐시라도 있으면 502 대신 그것을 반환
+    if (cachedRelease) {
+      console.warn("GitHub fetch failed, serving stale release cache:", e);
+      // 짧은 시간 재시도 보류 → 레이트 리밋 상태에서 GitHub를 매 요청마다 두드리지 않음
+      cachedAt = now - CACHE_TTL_MS + STALE_RETRY_MS;
+      return cachedRelease;
+    }
+    throw e;
+  }
 }
 
 /** 최신 베타(pre-release) 릴리즈 정보 (캐싱 적용)
@@ -137,22 +148,32 @@ export async function getLatestBetaRelease(): Promise<ReleaseInfo | null> {
     return cachedBetaRelease;
   }
 
-  const [betaRelease, stableRelease] = await Promise.all([
-    fetchLatestPreRelease(),
-    fetchLatestRelease(),
-  ]);
+  try {
+    const [betaRelease, stableRelease] = await Promise.all([
+      fetchLatestPreRelease(),
+      fetchLatestRelease(),
+    ]);
 
-  const beta = betaRelease ? toReleaseInfo(betaRelease) : null;
-  const stable = toReleaseInfo(stableRelease);
+    const beta = betaRelease ? toReleaseInfo(betaRelease) : null;
+    const stable = toReleaseInfo(stableRelease);
 
-  // 베타가 없거나 안정 버전이 더 높으면 안정 버전 반환
-  const result =
-    !beta || compareVersions(stable.version, beta.version) > 0 ? stable : beta;
+    // 베타가 없거나 안정 버전이 더 높으면 안정 버전 반환
+    const result =
+      !beta || compareVersions(stable.version, beta.version) > 0 ? stable : beta;
 
-  cachedBetaRelease = result;
-  cachedBetaAt = now;
+    cachedBetaRelease = result;
+    cachedBetaAt = now;
 
-  return cachedBetaRelease;
+    return cachedBetaRelease;
+  } catch (e) {
+    // GitHub 호출 실패(레이트 리밋 등) — 만료된 캐시라도 있으면 502 대신 그것을 반환
+    if (cachedBetaRelease) {
+      console.warn("GitHub fetch failed, serving stale beta cache:", e);
+      cachedBetaAt = now - CACHE_TTL_MS + STALE_RETRY_MS;
+      return cachedBetaRelease;
+    }
+    throw e;
+  }
 }
 
 /** 캐시 강제 무효화 */
