@@ -23,13 +23,31 @@ PiCell One 데스크톱 앱의 **업데이트 배포 서버 + 관리 콘솔**입
 ## 빠른 시작
 
 ```bash
-npm install
+pnpm install
 cp .env.example .env    # ADMIN_PASSWORD와 STORAGE_* 채우기
 
-npm run dev             # API(3000) + 콘솔 HMR(5173) 동시 실행 → http://localhost:5173/admin
-npm run build && npm start   # 프로덕션 빌드 후 실행 → http://localhost:3000/admin
-npm run typecheck       # tsc + svelte-check
+pnpm dev:local          # API(3000) + 콘솔 HMR(5173) 한 번에 → http://localhost:5173/admin
+pnpm build && pnpm start     # 프로덕션 빌드 후 실행 → http://localhost:3000/admin
+pnpm typecheck          # tsc + svelte-check
 ```
+
+`dev:local`은 두 프로세스를 함께 띄우고 로그에 `[api]` / `[web]` 프리픽스를 붙이며,
+Ctrl+C 한 번에 둘 다 정리합니다. 한쪽이 죽으면 나머지도 내려 반쪽만 떠 있는 상태를
+만들지 않습니다. 시작 전에 다음을 점검하고, 문제가 있으면 해결 방법을 알려줍니다:
+
+- `.env` 로드 (Node의 `--env-file`, 별도 dotenv 의존성 없음)
+- `better-sqlite3` 네이티브 바인딩 — **pnpm 10+는 빌드 스크립트를 기본 차단**합니다.
+  `package.json`의 `pnpm.onlyBuiltDependencies`에 등록해 뒀지만, 그래도 막혔다면
+  `pnpm rebuild better-sqlite3`로 해결합니다.
+- `rolldown` 네이티브 바인딩 (콘솔 빌드용)
+- `ADMIN_PASSWORD` · `STORAGE_*` 설정 여부
+
+**접속은 5173입니다.** 3000은 API 전용이고, 콘솔은 vite dev 서버가 열되
+`/admin/api`·`/update` 요청만 3000으로 프록시합니다.
+로컬 DB는 `.data/dev.db`로 분리되고, `--api-only`로 API만 띄울 수도 있습니다.
+
+> 운영 R2 버킷을 로컬에서 함께 쓴다면 `.env`에 `STORAGE_KEY_PREFIX=dev/`를 넣으세요.
+> 로컬 업로드가 운영 스토리지 스캔에 섞이지 않습니다(미설정 시 경고가 뜹니다).
 
 ---
 
