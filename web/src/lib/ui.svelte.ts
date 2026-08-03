@@ -71,3 +71,33 @@ class ConfirmStore {
 }
 
 export const confirms = new ConfirmStore();
+
+/**
+ * 릴리즈 생성 화면 → 상세 화면으로 넘기는 업로드 대기 파일.
+ * 릴리즈를 만든 흐름 그대로 업로드까지 이어가기 위한 1회성 인계다.
+ * 반응형일 필요가 없어 평범한 객체로 두고, 상세 화면이 읽는 즉시 비운다.
+ */
+export const pendingUpload: {
+  file: File | null;
+  releaseId: string | null;
+  platform: string | null;
+  arch: string | null;
+} = { file: null, releaseId: null, platform: null, arch: null };
+
+export function takePendingUpload(releaseId: string): {
+  file: File;
+  platform: string | null;
+  arch: string | null;
+} | null {
+  if (!pendingUpload.file || pendingUpload.releaseId !== releaseId) return null;
+  const taken = {
+    file: pendingUpload.file,
+    platform: pendingUpload.platform,
+    arch: pendingUpload.arch,
+  };
+  pendingUpload.file = null;
+  pendingUpload.releaseId = null;
+  pendingUpload.platform = null;
+  pendingUpload.arch = null;
+  return taken;
+}

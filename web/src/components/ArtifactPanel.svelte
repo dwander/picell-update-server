@@ -1,13 +1,15 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { CircleCheck, CircleAlert, Link2, Trash2, Upload } from "lucide-svelte";
   import { api, uploadToR2 } from "../lib/api.js";
-  import { confirms, toasts } from "../lib/ui.svelte.js";
+  import { confirms, takePendingUpload, toasts } from "../lib/ui.svelte.js";
   import { formatBytes, shortSha } from "../lib/format.js";
   import Badge from "./Badge.svelte";
   import Button from "./Button.svelte";
   import Modal from "./Modal.svelte";
   import Field from "./Field.svelte";
   import EmptyState from "./EmptyState.svelte";
+  import { isArch, isPlatform } from "../lib/guards.js";
   import type { Arch, ArtifactDTO, Platform } from "../../../src/types.js";
 
   interface Props {
@@ -33,20 +35,36 @@
   let arch = $state<Arch>("x64");
 
   let dragging = $state(false);
-  let uploads = $state<{ name: string; loaded: number; total: number; phase: string }[]>([]);
+  interface UploadTask {
+    id: number;
+    name: string;
+    loaded: number;
+    total: number;
+    phase: string;
+  }
+
+  let uploads = $state<UploadTask[]>([]);
+  let nextUploadId = 0;
   let importing = $state(false);
   let importUrl = $state("");
   let importBusy = $state(false);
   let fileInput = $state<HTMLInputElement | null>(null);
 
-  async function uploadFile(file: File): Promise<void> {
-    const entry = { name: file.name, loaded: 0, total: file.size, phase: "준비 중" };
-    uploads = [...uploads, entry];
+  /**
+   * 진행 상태는 **$state 배열 안의 요소를 찾아** 고친다.
+   * 바깥에 들고 있던 원본 객체를 고치면 프록시를 우회해 반응성이 안 걸리고,
+   * 원본과 프록시는 서로 !== 라서 완료 후 목록에서 지워지지도 않는다.
+   */
+  function patchUpload(id: number, patch: Partial<UploadTask>): void {
+    const target = uploads.find((u) => u.id === id);
+    if (target) Object.assign(target, patch);
+  }
 
-    const update = (patch: Partial<typeof entry>): void => {
-      Object.assign(entry, patch);
-      uploads = [...uploads];
-    };
+  async function uploadFile(file: File): Promise<void> {
+    const id = nextUploadId++;
+    uploads.push({ id, name: file.name, loaded: 0, total: file.size, phase: "준비 중" });
+
+    const update = (patch: Partial<UploadTask>): void => patchUpload(id, patch);
 
     try {
       const { artifactId, uploadUrl } = await api.presignUpload(releaseId, {
@@ -68,7 +86,7 @@
     } catch (e) {
       toasts.error(e);
     } finally {
-      uploads = uploads.filter((u) => u !== entry);
+      uploads = uploads.filter((u) => u.id !== id);
     }
   }
 
@@ -123,6 +141,15 @@
       toasts.error(e);
     }
   }
+
+  // 릴리즈 생성 화면에서 파일을 고른 채로 만들었으면 그대로 업로드까지 이어간다.
+  onMount(() => {
+    const handoff = takePendingUpload(releaseId);
+    if (!handoff || !storageConfigured) return;
+    if (isPlatform(handoff.platform)) platform = handoff.platform;
+    if (isArch(handoff.arch)) arch = handoff.arch;
+    void uploadFile(handoff.file);
+  });
 
   async function verify(artifact: ArtifactDTO): Promise<void> {
     try {
@@ -195,7 +222,7 @@
 
 {#if uploads.length > 0}
   <ul class="space-y-2 px-4 pb-4">
-    {#each uploads as u (u.name)}
+    {#each uploads as u (u.id)}
       <li class="rounded-lg border border-line bg-surface-0 p-3">
         <div class="flex justify-between text-xs">
           <span class="truncate text-ink">{u.name}</span>

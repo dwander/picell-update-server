@@ -9,6 +9,7 @@ import { normalizeVersion, isValidVersion, isPrerelease } from "../version.js";
 import { createRelease, getReleaseRowByVersion, ReleaseError } from "./releases.js";
 import { importFromUrl } from "./artifacts.js";
 import { parseMarkdownToItems, saveChangelog } from "./changelog.js";
+import { detectArch, detectPlatform } from "./artifact-naming.js";
 import type { Arch, Channel, Platform } from "../types.js";
 
 const FETCH_TIMEOUT_MS = 15_000;
@@ -29,27 +30,6 @@ export interface GitHubRelease {
   prerelease: boolean;
   published_at: string;
   assets: GitHubAsset[];
-}
-
-/** 에셋 파일명 → 플랫폼 추정. 매칭 실패한 에셋은 임포트에서 건너뛴다. */
-const PLATFORM_PATTERNS: [RegExp, Platform][] = [
-  [/\.(exe|msi)$/i, "windows"],
-  [/\.(dmg|pkg)$/i, "macos"],
-  [/\.(appimage|deb|rpm)$/i, "linux"],
-];
-
-const ARCH_PATTERNS: [RegExp, Arch][] = [
-  [/(arm64|aarch64)/i, "arm64"],
-  [/universal/i, "universal"],
-  [/(x64|x86_64|amd64|win32)/i, "x64"],
-];
-
-export function detectPlatform(fileName: string): Platform | null {
-  return PLATFORM_PATTERNS.find(([re]) => re.test(fileName))?.[1] ?? null;
-}
-
-export function detectArch(fileName: string): Arch {
-  return ARCH_PATTERNS.find(([re]) => re.test(fileName))?.[1] ?? "x64";
 }
 
 export function githubConfig(): { owner: string; repo: string; token: string | undefined } {

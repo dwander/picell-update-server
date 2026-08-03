@@ -6,6 +6,7 @@ import { requireAuth } from "../helpers.js";
 import { releasesRouter } from "./releases.js";
 import { artifactsRouter } from "./artifacts.js";
 import { opsRouter } from "./ops.js";
+import { importRouter } from "./import.js";
 import { isStorageConfigured, bucketName, storagePrefix } from "../../services/storage.js";
 import { isGithubConfigured } from "../../services/github.js";
 
@@ -26,3 +27,4 @@ adminRouter.get("/config", (c) =>
 adminRouter.route("/releases", releasesRouter);
 adminRouter.route("/", artifactsRouter);
 adminRouter.route("/", opsRouter);
+adminRouter.route("/", importRouter);

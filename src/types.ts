@@ -195,3 +195,31 @@ export interface StorageOverviewDTO {
   /** DB엔 있으나 R2에 없는 아티팩트 (업로드 실패 잔재) */
   missing: { artifactId: string; version: string; storageKey: string }[];
 }
+
+// ─── 자동 채우기 (파일명 추론 · 체인지로그 임포트) ───────────────────────────
+
+export interface InspectedFileNameDTO {
+  fileName: string;
+  version: string | null;
+  channel: Channel;
+  productName: string | null;
+  suggestedName: string | null;
+  platform: Platform | null;
+  arch: Arch;
+  kind: ArtifactKind;
+  /** 같은 버전의 릴리즈가 이미 있으면 그 id */
+  existingReleaseId: string | null;
+}
+
+export interface ChangelogImportEntryDTO {
+  rawVersion: string;
+  version: string | null;
+  date: string | null;
+  isLatest: boolean;
+  itemCount: number;
+  markdown: string;
+  items: { type: ChangelogType; text: string }[];
+  /** 매칭된 릴리즈. null이면 반영 대상이 아니다. */
+  releaseId: string | null;
+  releaseName: string | null;
+}

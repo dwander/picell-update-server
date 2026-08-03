@@ -15,6 +15,8 @@ import type {
   Arch,
   ArtifactKind,
   ArtifactDTO,
+  InspectedFileNameDTO,
+  ChangelogImportEntryDTO,
 } from "../../../src/types.js";
 
 const BASE = "/admin/api";
@@ -186,6 +188,24 @@ export const api = {
       skippedAssets: string[];
       error: string | null;
     }>("/github/import", { tagName }),
+
+  // ─── 자동 채우기 ───────────────────────────────────────────────────────────
+
+  inspectFileName: (fileName: string) =>
+    post<InspectedFileNameDTO>("/inspect/filename", { fileName }),
+  parseChangelog: (text: string, locale: Locale) =>
+    post<{
+      locale: Locale;
+      entries: ChangelogImportEntryDTO[];
+      matched: number;
+      unmatched: number;
+    }>("/changelog/parse", { text, locale }),
+  applyChangelog: (text: string, locale: Locale, versions?: string[]) =>
+    post<{ applied: string[]; appliedCount: number }>("/changelog/apply", {
+      text,
+      locale,
+      ...(versions ? { versions } : {}),
+    }),
 
   auditLogs: () =>
     get<{

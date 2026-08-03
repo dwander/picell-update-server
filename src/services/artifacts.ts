@@ -22,40 +22,8 @@ import {
   uploadStream,
 } from "./storage.js";
 import { ReleaseError, requireReleaseRow } from "./releases.js";
+import { guessContentType, guessKind } from "./artifact-naming.js";
 import type { Arch, ArtifactKind, Platform } from "../types.js";
-
-/** 확장자 → 기본 kind 추정. 관리자가 매번 고르지 않아도 되게. */
-const KIND_BY_EXTENSION: Record<string, ArtifactKind> = {
-  exe: "installer",
-  msi: "installer",
-  dmg: "installer",
-  pkg: "installer",
-  deb: "installer",
-  rpm: "installer",
-  appimage: "portable",
-  zip: "zip",
-  blockmap: "blockmap",
-};
-
-const CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
-  exe: "application/vnd.microsoft.portable-executable",
-  msi: "application/x-msi",
-  dmg: "application/x-apple-diskimage",
-  zip: "application/zip",
-  blockmap: "application/octet-stream",
-};
-
-function extensionOf(fileName: string): string {
-  return fileName.split(".").pop()?.toLowerCase() ?? "";
-}
-
-export function guessKind(fileName: string): ArtifactKind {
-  return KIND_BY_EXTENSION[extensionOf(fileName)] ?? "other";
-}
-
-export function guessContentType(fileName: string): string {
-  return CONTENT_TYPE_BY_EXTENSION[extensionOf(fileName)] ?? "application/octet-stream";
-}
 
 export function getArtifactRow(id: string): ArtifactRow | undefined {
   return db.select().from(artifacts).where(eq(artifacts.id, id)).get();

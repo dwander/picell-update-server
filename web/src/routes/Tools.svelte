@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Download, GitBranch, ScrollText } from "lucide-svelte";
+  import { Download, FileUp, GitBranch, ScrollText } from "lucide-svelte";
   import { api } from "../lib/api.js";
   import { confirms, toasts } from "../lib/ui.svelte.js";
   import { formatBytes, formatDate, formatDay } from "../lib/format.js";
@@ -8,7 +8,13 @@
   import Button from "../components/Button.svelte";
   import Badge from "../components/Badge.svelte";
   import EmptyState from "../components/EmptyState.svelte";
-  import type { Arch, Channel, Platform } from "../../../src/types.js";
+  import type {
+    Arch,
+    Channel,
+    ChangelogImportEntryDTO,
+    Locale,
+    Platform,
+  } from "../../../src/types.js";
 
   interface PreviewRelease {
     tagName: string;
@@ -33,6 +39,55 @@
   onMount(async () => {
     logs = (await api.auditLogs().catch(() => ({ logs: [] }))).logs;
   });
+
+  // ─── 체인지로그 파일 임포트 ────────────────────────────────────────────────
+
+  let changelogText = $state("");
+  let changelogFileName = $state("");
+  let changelogLocale = $state<Locale>("ko");
+  let changelogEntries = $state<ChangelogImportEntryDTO[] | null>(null);
+  let changelogBusy = $state(false);
+  let changelogInput = $state<HTMLInputElement | null>(null);
+
+  async function readChangelogFile(file: File): Promise<void> {
+    changelogBusy = true;
+    try {
+      changelogText = await file.text();
+      changelogFileName = file.name;
+      const result = await api.parseChangelog(changelogText, changelogLocale);
+      changelogEntries = result.entries;
+      toasts.info(`버전 ${result.entries.length}건 인식 · 릴리즈 매칭 ${result.matched}건`);
+    } catch (e) {
+      toasts.error(e);
+      changelogEntries = null;
+    } finally {
+      changelogBusy = false;
+    }
+  }
+
+  async function applyChangelog(): Promise<void> {
+    const targets = (changelogEntries ?? []).filter((e) => e.releaseId);
+    if (targets.length === 0) return;
+    const ok = await confirms.ask(
+      "체인지로그 일괄 반영",
+      `매칭된 릴리즈 ${targets.length}건의 ${changelogLocale === "ko" ? "한국어" : "영문"} 노트를 덮어씁니다.\n기존에 작성한 내용이 있으면 사라집니다.`,
+      { confirmLabel: "반영", danger: true },
+    );
+    if (!ok) return;
+
+    changelogBusy = true;
+    try {
+      const result = await api.applyChangelog(changelogText, changelogLocale);
+      toasts.ok(`릴리즈 ${result.appliedCount}건에 반영했습니다.`);
+      logs = (await api.auditLogs()).logs;
+    } catch (e) {
+      toasts.error(e);
+    } finally {
+      changelogBusy = false;
+    }
+  }
+
+  const changelogMatched = $derived((changelogEntries ?? []).filter((e) => e.releaseId).length);
 
   async function loadPreview(): Promise<void> {
     previewLoading = true;
@@ -77,6 +132,92 @@
   <h1 class="text-lg font-semibold text-ink">도구</h1>
   <p class="mt-0.5 text-xs text-ink-faint">이관 작업과 운영 기록</p>
 </header>
+
+<Card
+  title="체인지로그 파일 임포트"
+  subtitle="changelog.txt를 올리면 버전별로 갈라 매칭되는 릴리즈에 한 번에 반영합니다."
+  class="mb-4"
+  padded={false}
+>
+  {#snippet actions()}
+    <div class="flex rounded-lg border border-line p-0.5">
+      {#each [{ v: "ko", l: "한국어" }, { v: "en", l: "English" }] as opt (opt.v)}
+        <button
+          type="button"
+          class="rounded-md px-2.5 py-1 text-xs transition-colors {changelogLocale === opt.v
+            ? 'bg-surface-3 font-medium text-ink'
+            : 'text-ink-faint hover:text-ink-muted'}"
+          onclick={() => {
+            changelogLocale = opt.v as Locale;
+            if (changelogText) void api
+              .parseChangelog(changelogText, changelogLocale)
+              .then((r) => (changelogEntries = r.entries))
+              .catch(toasts.error);
+          }}
+        >
+          {opt.l}
+        </button>
+      {/each}
+    </div>
+    <Button loading={changelogBusy} onclick={() => changelogInput?.click()}>
+      <FileUp size={13} />파일 선택
+    </Button>
+  {/snippet}
+
+  <input
+    type="file"
+    accept=".txt,.md,text/plain,text/markdown"
+    bind:this={changelogInput}
+    class="hidden"
+    onchange={(e) => {
+      const file = e.currentTarget.files?.[0];
+      if (file) void readChangelogFile(file);
+      e.currentTarget.value = "";
+    }}
+  />
+
+  {#if !changelogEntries}
+    <EmptyState
+      title="체인지로그 파일을 선택하세요."
+      body={"'## [0.5.33] 2026-07-18' 형식의 버전 헤딩과 '### 개선' / '- 항목' 구조를 읽습니다.\n카테고리 제목은 원문 그대로 보존되고, 항목 타입은 최대한 자동 분류합니다."}
+    />
+  {:else}
+    <div class="flex flex-wrap items-center gap-3 border-b border-line px-4 py-2 text-xs">
+      <span class="font-mono text-ink-muted">{changelogFileName}</span>
+      <Badge tone="accent">인식 {changelogEntries.length}</Badge>
+      <Badge tone={changelogMatched > 0 ? "ok" : "warn"}>매칭 {changelogMatched}</Badge>
+      <Button
+        class="ml-auto"
+        variant="primary"
+        loading={changelogBusy}
+        disabled={changelogMatched === 0}
+        onclick={applyChangelog}
+      >
+        매칭된 {changelogMatched}건 반영
+      </Button>
+    </div>
+    <ul class="max-h-96 divide-y divide-line overflow-y-auto">
+      {#each changelogEntries as entry (entry.rawVersion)}
+        <li class="flex flex-wrap items-center gap-3 px-4 py-2">
+          <span class="w-28 shrink-0 font-mono text-sm text-ink">{entry.rawVersion}</span>
+          <span class="shrink-0">
+            {#if entry.isLatest}
+              <Badge tone="neutral">개발 중 · 건너뜀</Badge>
+            {:else if entry.releaseId}
+              <Badge tone="ok">반영 대상</Badge>
+            {:else}
+              <Badge tone="warn">릴리즈 없음</Badge>
+            {/if}
+          </span>
+          <span class="min-w-0 flex-1 truncate text-xs text-ink-faint">
+            {entry.releaseName ?? entry.date ?? ""}
+          </span>
+          <span class="shrink-0 font-mono text-xs text-ink-muted">항목 {entry.itemCount}</span>
+        </li>
+      {/each}
+    </ul>
+  {/if}
+</Card>
 
 <Card
   title="GitHub Releases 임포트"

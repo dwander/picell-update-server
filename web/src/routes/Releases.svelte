@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Plus } from "lucide-svelte";
+  import { FileUp, Plus } from "lucide-svelte";
   import { api } from "../lib/api.js";
   import { navigate, router } from "../lib/router.svelte.js";
-  import { toasts } from "../lib/ui.svelte.js";
+  import { pendingUpload, toasts } from "../lib/ui.svelte.js";
   import { formatBytes, formatDate, formatNumber } from "../lib/format.js";
   import Card from "../components/Card.svelte";
   import Button from "../components/Button.svelte";
@@ -11,7 +11,12 @@
   import Field from "../components/Field.svelte";
   import ReleaseBadges from "../components/ReleaseBadges.svelte";
   import EmptyState from "../components/EmptyState.svelte";
-  import type { Channel, ReleaseStatus, ReleaseSummaryDTO } from "../../../src/types.js";
+  import type {
+    Channel,
+    InspectedFileNameDTO,
+    ReleaseStatus,
+    ReleaseSummaryDTO,
+  } from "../../../src/types.js";
 
   const FILTERS: { value: ReleaseStatus | "all"; label: string }[] = [
     { value: "all", label: "전체" },
@@ -30,6 +35,43 @@
   let creating = $state(false);
   let busy = $state(false);
   let form = $state({ version: "", channel: "stable" as Channel, name: "" });
+
+  // 파일에서 유추한 값 — 만든 직후 그대로 업로드까지 이어가기 위해 파일을 들고 있는다.
+  let pickedFile = $state<File | null>(null);
+  let inspecting = $state(false);
+  let inspected = $state<InspectedFileNameDTO | null>(null);
+  let createFileInput = $state<HTMLInputElement | null>(null);
+
+  /**
+   * 설치 파일명에서 버전·표시 이름·채널을 채운다.
+   * 추론 규칙은 서버(artifact-naming)에 한 벌만 두고 여기서는 결과만 받는다 —
+   * GitHub 임포트와 같은 규칙을 써야 하므로 클라이언트에 복제하지 않는다.
+   */
+  async function inspectFile(file: File): Promise<void> {
+    pickedFile = file;
+    inspecting = true;
+    try {
+      const result = await api.inspectFileName(file.name);
+      inspected = result;
+      if (result.version) {
+        form.version = result.version;
+        form.channel = result.channel;
+        if (result.suggestedName) form.name = result.suggestedName;
+      } else {
+        toasts.info("파일명에서 버전을 찾지 못했습니다. 직접 입력해 주세요.");
+      }
+    } catch (e) {
+      toasts.error(e);
+    } finally {
+      inspecting = false;
+    }
+  }
+
+  function resetForm(): void {
+    form = { version: "", channel: "stable", name: "" };
+    pickedFile = null;
+    inspected = null;
+  }
 
   async function load(): Promise<void> {
     loading = true;
@@ -56,7 +98,12 @@
       const { release } = await api.createRelease(input);
       toasts.ok(`릴리즈 ${release.version}을(를) 만들었습니다.`);
       creating = false;
-      form = { version: "", channel: "stable", name: "" };
+      // 파일을 고른 채로 만들었다면 상세 화면에서 곧바로 업로드까지 이어간다.
+      pendingUpload.file = pickedFile;
+      pendingUpload.releaseId = release.id;
+      pendingUpload.platform = inspected?.platform ?? null;
+      pendingUpload.arch = inspected?.arch ?? null;
+      resetForm();
       router.go(`/releases/${release.id}`);
     } catch (e) {
       toasts.error(e);
@@ -164,6 +211,33 @@
 
 <Modal title="새 릴리즈" open={creating} onclose={() => (creating = false)}>
   <div class="space-y-3">
+    <div
+      role="region"
+      aria-label="설치 파일 드롭 영역"
+      class="rounded-lg border-2 border-dashed border-line p-3 text-center"
+      ondragover={(e) => e.preventDefault()}
+      ondrop={(e) => {
+        e.preventDefault();
+        const file = e.dataTransfer?.files?.[0];
+        if (file) void inspectFile(file);
+      }}
+    >
+      {#if inspected && pickedFile}
+        <p class="truncate font-mono text-xs text-ink">{pickedFile.name}</p>
+        <p class="mt-1 text-xs text-ink-faint">
+          {inspected.version
+            ? `${inspected.platform ?? "플랫폼 불명"} · ${inspected.arch} · ${inspected.kind}`
+            : "버전을 찾지 못했습니다"}
+        </p>
+      {:else}
+        <p class="text-xs text-ink-faint whitespace-pre-line">
+          {"설치 파일을 끌어다 놓거나 선택하면 버전·이름·채널을 자동으로 채웁니다.\n예: PiCell One-0.5.33-Setup.exe"}
+        </p>
+      {/if}
+      <Button class="mt-2" loading={inspecting} onclick={() => createFileInput?.click()}>
+        <FileUp size={13} />파일 선택
+      </Button>
+    </div>
     <Field label="버전" hint="semver 형식. 예: 1.4.0 또는 1.4.0-beta.1">
       <input
         bind:value={form.version}
@@ -186,3 +260,14 @@
     <Button variant="primary" loading={busy} onclick={create}>만들기</Button>
   {/snippet}
 </Modal>
+
+<input
+  type="file"
+  bind:this={createFileInput}
+  class="hidden"
+  onchange={(e) => {
+    const file = e.currentTarget.files?.[0];
+    if (file) void inspectFile(file);
+    e.currentTarget.value = "";
+  }}
+/>
