@@ -31,12 +31,15 @@ fail() { echo "✗ $1" >&2; shift; for l in "$@"; do echo "  $l" >&2; done; exit
 
 # pnpm 10+는 네이티브 빌드 스크립트를 기본 차단한다. better-sqlite3가 이에 걸리면
 # 서버가 부팅 중 "Could not locate the bindings file"로 죽는다 — 미리 잡는다.
-if ! node -e "require('better-sqlite3')" >/dev/null 2>&1; then
+#
+# **require만으로는 못 잡는다.** 바인딩은 첫 `new Database()`에서 로드되므로
+# require는 멀쩡히 성공한다. 실제 사용 시점까지 흉내 내야 의미가 있다.
+if ! node -e "new (require('better-sqlite3'))(':memory:')" >/dev/null 2>&1; then
   fail "better-sqlite3 네이티브 바인딩을 불러올 수 없습니다." \
-       "pnpm이 빌드 스크립트를 차단했을 가능성이 큽니다. 아래 중 하나로 해결하세요:" \
+       "pnpm이 빌드 스크립트를 차단했을 가능성이 큽니다:" \
        "  pnpm rebuild better-sqlite3" \
-       "  pnpm approve-builds        # 대화형으로 허용" \
-       "(package.json의 pnpm.onlyBuiltDependencies에 이미 등록돼 있습니다)"
+       "(pnpm-workspace.yaml의 allowBuilds에 등록돼 있어야 합니다. pnpm 11부터" \
+       " package.json의 pnpm 필드는 무시됩니다.)"
 fi
 
 # vite 8의 번들러(rolldown) 네이티브 바인딩 — 없으면 콘솔 빌드가 죽는다.
