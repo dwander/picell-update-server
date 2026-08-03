@@ -2,6 +2,7 @@ import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
 import { ReleaseError } from "../services/releases.js";
 import { SESSION_COOKIE, isAuthConfigured, validateSession } from "../services/auth.js";
+import { storageErrorMessage } from "../services/storage.js";
 
 /** 관리 API 공용 에러 변환 — 도메인 에러는 상태코드를 살리고, 나머지는 500. */
 export async function handle<T>(c: Context, fn: () => T | Promise<T>): Promise<Response> {
@@ -10,6 +11,12 @@ export async function handle<T>(c: Context, fn: () => T | Promise<T>): Promise<R
   } catch (e) {
     if (e instanceof ReleaseError) {
       return c.json({ error: e.message }, e.status as 400);
+    }
+    // R2 설정 오류는 SDK 스택 대신 고칠 수 있는 문장으로 돌려준다.
+    const storageMessage = storageErrorMessage(e);
+    if (storageMessage) {
+      console.error("[admin] storage:", (e as { name?: string })?.name);
+      return c.json({ error: storageMessage }, 502);
     }
     console.error("[admin]", e);
     const message = e instanceof Error ? e.message : "알 수 없는 오류";

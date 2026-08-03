@@ -266,6 +266,31 @@ export async function deleteKeys(keys: string[]): Promise<void> {
   }
 }
 
+/**
+ * S3 SDK 오류를 사람이 고칠 수 있는 메시지로 바꾼다.
+ * 설정 실수(토큰 스코프·오타)가 압도적으로 흔한데, 그대로 두면 콘솔에 500과
+ * SDK 스택만 뜬다. 해당 없는 오류는 null을 돌려 원래 처리에 맡긴다.
+ */
+export function storageErrorMessage(e: unknown): string | null {
+  const err = e as { name?: string; $metadata?: { httpStatusCode?: number } };
+  const bucket = bucketName() || "(STORAGE_BUCKET 미설정)";
+  switch (err?.name) {
+    case "AccessDenied":
+      return `R2 자격증명이 '${bucket}' 버킷에 접근할 수 없습니다. API 토큰이 다른 버킷에만 스코프돼 있지 않은지 확인하세요.`;
+    case "NoSuchBucket":
+      return `R2 버킷 '${bucket}'을(를) 찾을 수 없습니다. STORAGE_BUCKET 값과 버킷 존재 여부를 확인하세요.`;
+    case "InvalidAccessKeyId":
+      return "STORAGE_ACCESS_KEY_ID가 올바르지 않습니다.";
+    case "SignatureDoesNotMatch":
+      return "STORAGE_SECRET_ACCESS_KEY가 올바르지 않습니다.";
+  }
+  // R2는 스코프 밖 버킷의 HeadBucket에 이름 없는 403을 준다.
+  if (err?.$metadata?.httpStatusCode === 403) {
+    return `R2가 '${bucket}' 버킷 접근을 거부했습니다(403). API 토큰의 버킷 스코프와 권한을 확인하세요.`;
+  }
+  return null;
+}
+
 export type StorageObject = { key: string; size: number; lastModified: Date | null };
 
 /** 아티팩트 루트 하위를 페이지네이션 스캔. 반환 키는 **논리 키**. */
