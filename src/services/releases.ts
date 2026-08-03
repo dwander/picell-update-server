@@ -1,0 +1,352 @@
+// 릴리즈 도메인. 구 버전은 GitHub Releases API를 매 요청 조회하고 5분 캐시로
+// 버텼지만(레이트 리밋 → 502 장애), 이제 릴리즈 메타는 우리 DB가, 바이너리는
+// R2가 1차 출처다. 외부 의존이 사라져 캐시·스테일 폴백 자체가 불필요해졌다.
+
+import { db, newId } from "../db/index.js";
+import { artifacts, changelogs, downloads, releases } from "../db/schema.js";
+import type { ArtifactRow, ReleaseRow } from "../db/schema.js";
+import { and, eq, inArray, sql } from "drizzle-orm";
+import { compareVersions, isValidVersion, normalizeVersion } from "../version.js";
+import { deleteChangelogs, getChangelog } from "./changelog.js";
+import { deleteByPrefix } from "./storage.js";
+import {
+  LOCALES,
+  type Arch,
+  type ArtifactDTO,
+  type ArtifactKind,
+  type Channel,
+  type Locale,
+  type Platform,
+  type ReleaseDTO,
+  type ReleaseStatus,
+  type ReleaseSummaryDTO,
+} from "../types.js";
+
+/** 다운로드 엔드포인트가 아티팩트를 하나만 고를 때의 선호 순서. */
+const KIND_PREFERENCE: ArtifactKind[] = ["installer", "portable", "zip", "other", "blockmap"];
+
+export class ReleaseError extends Error {
+  constructor(
+    message: string,
+    readonly status = 400,
+  ) {
+    super(message);
+  }
+}
+
+// ─── 집계 ────────────────────────────────────────────────────────────────────
+
+function downloadCountsByRelease(): Map<string, number> {
+  const rows = db
+    .select({ releaseId: downloads.releaseId, count: sql<number>`count(*)` })
+    .from(downloads)
+    .groupBy(downloads.releaseId)
+    .all();
+  const map = new Map<string, number>();
+  for (const r of rows) if (r.releaseId) map.set(r.releaseId, r.count);
+  return map;
+}
+
+function downloadCountsByArtifact(releaseId: string): Map<string, number> {
+  const rows = db
+    .select({ artifactId: downloads.artifactId, count: sql<number>`count(*)` })
+    .from(downloads)
+    .where(eq(downloads.releaseId, releaseId))
+    .groupBy(downloads.artifactId)
+    .all();
+  const map = new Map<string, number>();
+  for (const r of rows) if (r.artifactId) map.set(r.artifactId, r.count);
+  return map;
+}
+
+// ─── 매핑 ────────────────────────────────────────────────────────────────────
+
+function toArtifactDTO(row: ArtifactRow, downloadCount: number): ArtifactDTO {
+  return {
+    id: row.id,
+    releaseId: row.releaseId,
+    platform: row.platform as Platform,
+    arch: row.arch as Arch,
+    kind: row.kind as ArtifactKind,
+    fileName: row.fileName,
+    storageKey: row.storageKey,
+    size: row.size,
+    sha256: row.sha256,
+    contentType: row.contentType,
+    status: row.status === "ready" ? "ready" : "uploading",
+    createdAt: row.createdAt.toISOString(),
+    uploadedAt: row.uploadedAt?.toISOString() ?? null,
+    downloadCount,
+  };
+}
+
+export function listArtifacts(releaseId: string): ArtifactRow[] {
+  return db.select().from(artifacts).where(eq(artifacts.releaseId, releaseId)).all();
+}
+
+export function toReleaseDTO(row: ReleaseRow): ReleaseDTO {
+  const counts = downloadCountsByArtifact(row.id);
+  const artifactRows = listArtifacts(row.id);
+  return {
+    id: row.id,
+    version: row.version,
+    channel: row.channel as Channel,
+    name: row.name,
+    status: row.status as ReleaseStatus,
+    mandatory: row.mandatory,
+    minSupportedVersion: row.minSupportedVersion,
+    rolloutPercent: row.rolloutPercent,
+    publishedAt: row.publishedAt?.toISOString() ?? null,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+    artifacts: artifactRows.map((a) => toArtifactDTO(a, counts.get(a.id) ?? 0)),
+    changelogs: LOCALES.map((l) => getChangelog(row.id, l)),
+    downloadCount: [...counts.values()].reduce((a, b) => a + b, 0),
+  };
+}
+
+// ─── 조회 ────────────────────────────────────────────────────────────────────
+
+/** 최신 버전이 앞. 같은 버전은 있을 수 없다(version unique). */
+function sortByVersionDesc<T extends { version: string }>(rows: T[]): T[] {
+  return [...rows].sort((a, b) => compareVersions(b.version, a.version));
+}
+
+export function listReleaseRows(): ReleaseRow[] {
+  return sortByVersionDesc(db.select().from(releases).all());
+}
+
+export function listReleaseSummaries(): ReleaseSummaryDTO[] {
+  const rows = listReleaseRows();
+  if (rows.length === 0) return [];
+  const dlCounts = downloadCountsByRelease();
+  const ids = rows.map((r) => r.id);
+  const artifactRows = db.select().from(artifacts).where(inArray(artifacts.releaseId, ids)).all();
+  const summaryRows = db
+    .select()
+    .from(changelogs)
+    .where(and(inArray(changelogs.releaseId, ids), eq(changelogs.locale, "ko")))
+    .all();
+  const summaryByRelease = new Map(summaryRows.map((r) => [r.releaseId, r.summary]));
+
+  return rows.map((r) => {
+    const mine = artifactRows.filter((a) => a.releaseId === r.id);
+    return {
+      id: r.id,
+      version: r.version,
+      channel: r.channel as Channel,
+      name: r.name,
+      status: r.status as ReleaseStatus,
+      mandatory: r.mandatory,
+      rolloutPercent: r.rolloutPercent,
+      publishedAt: r.publishedAt?.toISOString() ?? null,
+      updatedAt: r.updatedAt.toISOString(),
+      artifactCount: mine.length,
+      totalBytes: mine.reduce((sum, a) => sum + a.size, 0),
+      platforms: [...new Set(mine.map((a) => a.platform as Platform))],
+      downloadCount: dlCounts.get(r.id) ?? 0,
+      summary: summaryByRelease.get(r.id) ?? "",
+    };
+  });
+}
+
+export function getReleaseRow(id: string): ReleaseRow | undefined {
+  return db.select().from(releases).where(eq(releases.id, id)).get();
+}
+
+export function getReleaseRowByVersion(version: string): ReleaseRow | undefined {
+  return db.select().from(releases).where(eq(releases.version, normalizeVersion(version))).get();
+}
+
+export function requireReleaseRow(id: string): ReleaseRow {
+  const row = getReleaseRow(id);
+  if (!row) throw new ReleaseError("릴리즈를 찾을 수 없습니다.", 404);
+  return row;
+}
+
+// ─── 생성·수정 ───────────────────────────────────────────────────────────────
+
+export interface CreateReleaseInput {
+  version: string;
+  channel: Channel;
+  name?: string;
+  mandatory?: boolean;
+  minSupportedVersion?: string | null;
+  rolloutPercent?: number;
+}
+
+export function createRelease(input: CreateReleaseInput): ReleaseDTO {
+  const version = normalizeVersion(input.version);
+  if (!isValidVersion(version)) {
+    throw new ReleaseError(`올바른 semver가 아닙니다: ${input.version}`);
+  }
+  if (getReleaseRowByVersion(version)) {
+    throw new ReleaseError(`이미 존재하는 버전입니다: ${version}`, 409);
+  }
+  const now = new Date();
+  const row = {
+    id: newId(),
+    version,
+    channel: input.channel,
+    name: input.name?.trim() || `PiCell One ${version}`,
+    status: "draft" as const,
+    mandatory: input.mandatory ?? false,
+    minSupportedVersion: normalizeOptionalVersion(input.minSupportedVersion),
+    rolloutPercent: clampPercent(input.rolloutPercent ?? 100),
+    publishedAt: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  db.insert(releases).values(row).run();
+  return toReleaseDTO(row as ReleaseRow);
+}
+
+export interface UpdateReleaseInput {
+  channel?: Channel;
+  name?: string;
+  mandatory?: boolean;
+  minSupportedVersion?: string | null;
+  rolloutPercent?: number;
+  status?: ReleaseStatus;
+}
+
+export function updateRelease(id: string, input: UpdateReleaseInput): ReleaseDTO {
+  const row = requireReleaseRow(id);
+  const patch: Partial<ReleaseRow> = { updatedAt: new Date() };
+
+  if (input.channel !== undefined) patch.channel = input.channel;
+  if (input.name !== undefined) patch.name = input.name.trim();
+  if (input.mandatory !== undefined) patch.mandatory = input.mandatory;
+  if (input.minSupportedVersion !== undefined) {
+    patch.minSupportedVersion = normalizeOptionalVersion(input.minSupportedVersion);
+  }
+  if (input.rolloutPercent !== undefined) patch.rolloutPercent = clampPercent(input.rolloutPercent);
+
+  if (input.status !== undefined && input.status !== row.status) {
+    if (input.status === "published") {
+      assertPublishable(row);
+      // 최초 발행 시각만 남긴다 — 재발행으로 게시일이 밀리면 이력이 왜곡된다.
+      patch.publishedAt = row.publishedAt ?? new Date();
+    }
+    patch.status = input.status;
+  }
+
+  db.update(releases).set(patch).where(eq(releases.id, id)).run();
+  return toReleaseDTO(requireReleaseRow(id));
+}
+
+/** 발행 전 최소 조건: 업로드가 끝난 아티팩트가 최소 1개. */
+function assertPublishable(row: ReleaseRow): void {
+  const ready = db
+    .select({ count: sql<number>`count(*)` })
+    .from(artifacts)
+    .where(and(eq(artifacts.releaseId, row.id), eq(artifacts.status, "ready")))
+    .get();
+  if ((ready?.count ?? 0) === 0) {
+    throw new ReleaseError("업로드 완료된 아티팩트가 없어 발행할 수 없습니다.");
+  }
+}
+
+function normalizeOptionalVersion(v: string | null | undefined): string | null {
+  if (v === undefined || v === null) return null;
+  const n = normalizeVersion(v);
+  if (!n) return null;
+  if (!isValidVersion(n)) throw new ReleaseError(`올바른 semver가 아닙니다: ${v}`);
+  return n;
+}
+
+function clampPercent(v: number): number {
+  if (!Number.isFinite(v)) return 100;
+  return Math.max(0, Math.min(100, Math.round(v)));
+}
+
+/** 릴리즈와 R2 오브젝트를 함께 삭제한다. 스토리지 실패는 삼키지 않고 알린다. */
+export async function deleteRelease(id: string): Promise<{ deletedObjects: number }> {
+  const row = requireReleaseRow(id);
+  const deletedObjects = await deleteByPrefix(`releases/${row.version}/`);
+  db.delete(artifacts).where(eq(artifacts.releaseId, id)).run();
+  deleteChangelogs(id);
+  db.delete(releases).where(eq(releases.id, id)).run();
+  // 다운로드 이력은 통계를 위해 남긴다(version 문자열로 계속 집계 가능).
+  return { deletedObjects };
+}
+
+// ─── 채널 해석 (클라이언트 업데이트 확인의 핵심) ─────────────────────────────
+
+export interface ResolvedRelease {
+  release: ReleaseRow;
+  artifact: ArtifactRow | null;
+}
+
+/**
+ * 채널·플랫폼에 대해 배포 가능한 최신 릴리즈를 고른다.
+ * - published 상태만 후보 (draft/archived 제외)
+ * - beta 채널은 beta ∪ stable 중 최신 — 안정 버전이 더 높으면 그쪽을 준다(구 동작 승계)
+ * - 해당 플랫폼 아티팩트가 없는 릴리즈는 건너뛰고 그 아래 버전을 본다
+ */
+export function resolveLatest(
+  channel: Channel,
+  platform: Platform,
+  arch: Arch,
+): ResolvedRelease | null {
+  const candidateChannels: Channel[] = channel === "beta" ? ["beta", "stable"] : ["stable"];
+  const rows = sortByVersionDesc(
+    db
+      .select()
+      .from(releases)
+      .where(and(eq(releases.status, "published"), inArray(releases.channel, candidateChannels)))
+      .all(),
+  );
+
+  for (const row of rows) {
+    const artifact = pickArtifact(listArtifacts(row.id), platform, arch);
+    if (artifact) return { release: row, artifact };
+  }
+  return null;
+}
+
+/** 플랫폼·아키텍처에 맞는 대표 아티팩트. arch 정확 일치 > universal > 그 외. */
+export function pickArtifact(
+  rows: ArtifactRow[],
+  platform: Platform,
+  arch: Arch,
+): ArtifactRow | null {
+  const ready = rows.filter((a) => a.status === "ready" && a.platform === platform);
+  if (ready.length === 0) return null;
+
+  const archScore = (a: ArtifactRow): number =>
+    a.arch === arch ? 0 : a.arch === "universal" ? 1 : 2;
+  const kindScore = (a: ArtifactRow): number => {
+    const idx = KIND_PREFERENCE.indexOf(a.kind as ArtifactKind);
+    return idx === -1 ? KIND_PREFERENCE.length : idx;
+  };
+
+  return (
+    [...ready].sort((a, b) => archScore(a) - archScore(b) || kindScore(a) - kindScore(b))[0] ?? null
+  );
+}
+
+/** 발행된 릴리즈를 최신순으로 (체인지로그 피드용). */
+export function listPublishedRows(channel: Channel): ReleaseRow[] {
+  const candidateChannels: Channel[] = channel === "beta" ? ["beta", "stable"] : ["stable"];
+  return sortByVersionDesc(
+    db
+      .select()
+      .from(releases)
+      .where(and(eq(releases.status, "published"), inArray(releases.channel, candidateChannels)))
+      .all(),
+  );
+}
+
+/** 관리 콘솔 타임라인용 — 상태 무관 전체, 최신순. */
+export function listChangelogTimeline(locale: Locale) {
+  return listReleaseRows().map((row) => ({
+    id: row.id,
+    version: row.version,
+    channel: row.channel as Channel,
+    name: row.name,
+    status: row.status as ReleaseStatus,
+    publishedAt: row.publishedAt?.toISOString() ?? null,
+    changelog: getChangelog(row.id, locale),
+  }));
+}

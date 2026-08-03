@@ -2,8 +2,12 @@
 nixPkgs = ['nodejs_22', 'python3', 'gcc', 'gnumake']
 
 [phases.install]
-cmds = ['npm install']
+# --include=optional은 명시적 의도 표현. 다만 npm은 옵셔널 의존성 다운로드가
+# 실패해도 조용히 넘어가므로(npm/cli#4828) 이것만으로는 부족하다 —
+# 실제 보증은 build 스크립트의 scripts/ensure-native-deps.mjs가 한다.
+cmds = ['npm ci --include=optional']
 
+# 관리 콘솔(vite) → dist/public, 서버(tsc) → dist. 둘 다 build 스크립트에 묶여 있다.
 [phases.build]
 cmds = ['npm run build']
 

@@ -1,32 +1,83 @@
-import type { GitHubRelease, ReleaseInfo, AssetInfo, Platform } from "../types.js";
+// GitHub Releases 임포트 — **런타임 의존이 아니라 이관 도구**다.
+//
+// 구 서버는 매 업데이트 확인마다 GitHub API를 조회해 레이트 리밋에 걸리면 502를
+// 냈다. 이제 배포의 1차 출처는 R2 + 우리 DB이고, GitHub는 과거 릴리즈를 한 번
+// 끌어오는 소스로만 쓴다. 임포트가 끝나면 GITHUB_TOKEN 없이도 서비스가 돈다.
 
-const GITHUB_OWNER = process.env.GITHUB_OWNER || "dwander";
-const GITHUB_REPO = process.env.GITHUB_REPO || "picell-releases";
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
+import { optionalEnv } from "../env.js";
+import { normalizeVersion, isValidVersion, isPrerelease } from "../version.js";
+import { createRelease, getReleaseRowByVersion, ReleaseError } from "./releases.js";
+import { importFromUrl } from "./artifacts.js";
+import { parseMarkdownToItems, saveChangelog } from "./changelog.js";
+import type { Arch, Channel, Platform } from "../types.js";
 
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5분
-const FETCH_TIMEOUT_MS = 8_000; // GitHub API 요청 타임아웃
-const STALE_RETRY_MS = 30 * 1000; // 페치 실패 후 GitHub 재시도 보류 간격
+const FETCH_TIMEOUT_MS = 15_000;
+const PER_PAGE = 100;
 
-/** 플랫폼별 에셋 파일 패턴 */
-const PLATFORM_PATTERNS: Record<Platform, RegExp> = {
-  windows: /\.exe$/i,
-};
+export interface GitHubAsset {
+  name: string;
+  browser_download_url: string;
+  size: number;
+  download_count: number;
+}
 
-let cachedRelease: ReleaseInfo | null = null;
-let cachedAt = 0;
-let cachedBetaRelease: ReleaseInfo | null = null;
-let cachedBetaAt = 0;
+export interface GitHubRelease {
+  tag_name: string;
+  name: string;
+  body: string;
+  draft: boolean;
+  prerelease: boolean;
+  published_at: string;
+  assets: GitHubAsset[];
+}
+
+/** 에셋 파일명 → 플랫폼 추정. 매칭 실패한 에셋은 임포트에서 건너뛴다. */
+const PLATFORM_PATTERNS: [RegExp, Platform][] = [
+  [/\.(exe|msi)$/i, "windows"],
+  [/\.(dmg|pkg)$/i, "macos"],
+  [/\.(appimage|deb|rpm)$/i, "linux"],
+];
+
+const ARCH_PATTERNS: [RegExp, Arch][] = [
+  [/(arm64|aarch64)/i, "arm64"],
+  [/universal/i, "universal"],
+  [/(x64|x86_64|amd64|win32)/i, "x64"],
+];
+
+export function detectPlatform(fileName: string): Platform | null {
+  return PLATFORM_PATTERNS.find(([re]) => re.test(fileName))?.[1] ?? null;
+}
+
+export function detectArch(fileName: string): Arch {
+  return ARCH_PATTERNS.find(([re]) => re.test(fileName))?.[1] ?? "x64";
+}
+
+export function githubConfig(): { owner: string; repo: string; token: string | undefined } {
+  return {
+    owner: optionalEnv("GITHUB_OWNER") ?? "dwander",
+    repo: optionalEnv("GITHUB_REPO") ?? "picell-releases",
+    token: optionalEnv("GITHUB_TOKEN"),
+  };
+}
+
+export function isGithubConfigured(): boolean {
+  const { owner, repo } = githubConfig();
+  return Boolean(owner && repo);
+}
 
 function apiHeaders(): Record<string, string> {
+  const { token } = githubConfig();
   const headers: Record<string, string> = {
-    Accept: "application/vnd.github.v3+json",
+    Accept: "application/vnd.github+json",
     "User-Agent": "picell-update-server",
   };
-  if (GITHUB_TOKEN) {
-    headers.Authorization = `Bearer ${GITHUB_TOKEN}`;
-  }
+  if (token) headers.Authorization = `Bearer ${token}`;
   return headers;
+}
+
+/** 에셋 바이트를 받을 때 쓰는 헤더 — private 레포도 이 조합이면 받아진다. */
+function assetHeaders(): Record<string, string> {
+  return { ...apiHeaders(), Accept: "application/octet-stream" };
 }
 
 async function fetchWithTimeout(url: string): Promise<Response> {
@@ -39,147 +90,131 @@ async function fetchWithTimeout(url: string): Promise<Response> {
   }
 }
 
-async function fetchLatestRelease(): Promise<GitHubRelease> {
-  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
+/** 레포의 릴리즈 목록(draft 제외, 최신순). */
+export async function listGitHubReleases(): Promise<GitHubRelease[]> {
+  const { owner, repo } = githubConfig();
+  const url = `https://api.github.com/repos/${owner}/${repo}/releases?per_page=${PER_PAGE}`;
   const res = await fetchWithTimeout(url);
-
   if (!res.ok) {
-    throw new Error(`GitHub API error: ${res.status} ${res.statusText}`);
+    throw new ReleaseError(`GitHub API 오류: ${res.status} ${res.statusText}`, 502);
+  }
+  const rows = (await res.json()) as GitHubRelease[];
+  return rows.filter((r) => !r.draft);
+}
+
+export interface ImportPreviewEntry {
+  tagName: string;
+  version: string;
+  name: string;
+  channel: Channel;
+  publishedAt: string;
+  alreadyImported: boolean;
+  assets: {
+    name: string;
+    size: number;
+    url: string;
+    platform: Platform | null;
+    arch: Arch;
+  }[];
+}
+
+/** 임포트 전 미리보기 — 무엇이 어떻게 분류될지 관리자가 먼저 확인한다. */
+export async function previewImport(): Promise<ImportPreviewEntry[]> {
+  const rows = await listGitHubReleases();
+  return rows
+    .filter((r) => isValidVersion(normalizeVersion(r.tag_name)))
+    .map((r) => {
+      const version = normalizeVersion(r.tag_name);
+      return {
+        tagName: r.tag_name,
+        version,
+        name: r.name || r.tag_name,
+        channel: (r.prerelease || isPrerelease(version) ? "beta" : "stable") as Channel,
+        publishedAt: r.published_at,
+        alreadyImported: Boolean(getReleaseRowByVersion(version)),
+        assets: r.assets.map((a) => ({
+          name: a.name,
+          size: a.size,
+          url: a.browser_download_url,
+          platform: detectPlatform(a.name),
+          arch: detectArch(a.name),
+        })),
+      };
+    });
+}
+
+export interface ImportResult {
+  version: string;
+  created: boolean;
+  importedAssets: number;
+  skippedAssets: string[];
+  error: string | null;
+}
+
+/**
+ * 릴리즈 하나를 가져온다. 이미 있는 버전은 건드리지 않는다(덮어쓰기로 운영 중인
+ * 릴리즈를 망가뜨리지 않도록). 임포트 결과는 draft로 들어오고, 발행은 사람이 한다.
+ */
+export async function importRelease(tagName: string): Promise<ImportResult> {
+  const releases = await listGitHubReleases();
+  const gh = releases.find((r) => r.tag_name === tagName);
+  if (!gh) throw new ReleaseError(`GitHub에서 태그를 찾을 수 없습니다: ${tagName}`, 404);
+
+  const version = normalizeVersion(gh.tag_name);
+  if (!isValidVersion(version)) {
+    throw new ReleaseError(`semver로 해석할 수 없는 태그입니다: ${tagName}`);
   }
 
-  return (await res.json()) as GitHubRelease;
-}
-
-async function fetchLatestPreRelease(): Promise<GitHubRelease | null> {
-  // per_page=100으로 충분히 가져와 정식 릴리즈가 많이 쌓여도 베타를 놓치지 않도록 함
-  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases?per_page=100`;
-  const res = await fetchWithTimeout(url);
-
-  if (!res.ok) {
-    throw new Error(`GitHub API error: ${res.status} ${res.statusText}`);
-  }
-
-  const releases = (await res.json()) as GitHubRelease[];
-  return releases.find((r) => r.prerelease) ?? null;
-}
-
-function parseVersion(tagName: string): string {
-  return tagName.replace(/^v/, "");
-}
-
-export function compareVersions(a: string, b: string): number {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  const len = Math.max(pa.length, pb.length);
-  for (let i = 0; i < len; i++) {
-    const na = pa[i] ?? 0;
-    const nb = pb[i] ?? 0;
-    if (na !== nb) return na - nb;
-  }
-  return 0;
-}
-
-function matchAsset(
-  assets: GitHubRelease["assets"],
-  platform: Platform
-): AssetInfo | null {
-  const pattern = PLATFORM_PATTERNS[platform];
-  const asset = assets.find((a) => pattern.test(a.name));
-  if (!asset) return null;
-
-  return {
-    url: asset.browser_download_url,
-    fileName: asset.name,
-    size: asset.size,
+  const result: ImportResult = {
+    version,
+    created: false,
+    importedAssets: 0,
+    skippedAssets: [],
+    error: null,
   };
-}
 
-function toReleaseInfo(release: GitHubRelease): ReleaseInfo {
-  const assetMap: Record<string, AssetInfo> = {};
+  let releaseId = getReleaseRowByVersion(version)?.id;
+  if (!releaseId) {
+    const channel: Channel = gh.prerelease || isPrerelease(version) ? "beta" : "stable";
+    const created = createRelease({
+      version,
+      channel,
+      name: gh.name || `PiCell One ${version}`,
+    });
+    releaseId = created.id;
+    result.created = true;
 
-  for (const platform of Object.keys(PLATFORM_PATTERNS) as Platform[]) {
-    const asset = matchAsset(release.assets, platform);
-    if (asset) {
-      assetMap[platform] = asset;
+    // 릴리즈 본문은 원문 그대로 보존하고, 항목 파싱은 부가 정보로만 채운다.
+    const body = gh.body ?? "";
+    saveChangelog(releaseId, "ko", {
+      bodyMarkdown: body,
+      items: parseMarkdownToItems(body),
+    });
+  }
+
+  for (const asset of gh.assets) {
+    const platform = detectPlatform(asset.name);
+    if (!platform) {
+      result.skippedAssets.push(asset.name);
+      continue;
+    }
+    try {
+      await importFromUrl(
+        {
+          releaseId,
+          url: asset.browser_download_url,
+          fileName: asset.name,
+          platform,
+          arch: detectArch(asset.name),
+        },
+        assetHeaders(),
+      );
+      result.importedAssets++;
+    } catch (e) {
+      result.skippedAssets.push(asset.name);
+      result.error = e instanceof Error ? e.message : String(e);
     }
   }
 
-  return {
-    version: parseVersion(release.tag_name),
-    name: release.name || release.tag_name,
-    notes: release.body || "",
-    publishedAt: release.published_at,
-    prerelease: release.prerelease,
-    assets: assetMap,
-  };
-}
-
-/** 최신 안정 릴리즈 정보 (캐싱 적용) */
-export async function getLatestRelease(): Promise<ReleaseInfo> {
-  const now = Date.now();
-
-  if (cachedRelease && now - cachedAt < CACHE_TTL_MS) {
-    return cachedRelease;
-  }
-
-  try {
-    const release = await fetchLatestRelease();
-    cachedRelease = toReleaseInfo(release);
-    cachedAt = now;
-    return cachedRelease;
-  } catch (e) {
-    // GitHub 호출 실패(레이트 리밋 등) — 만료된 캐시라도 있으면 502 대신 그것을 반환
-    if (cachedRelease) {
-      console.warn("GitHub fetch failed, serving stale release cache:", e);
-      // 짧은 시간 재시도 보류 → 레이트 리밋 상태에서 GitHub를 매 요청마다 두드리지 않음
-      cachedAt = now - CACHE_TTL_MS + STALE_RETRY_MS;
-      return cachedRelease;
-    }
-    throw e;
-  }
-}
-
-/** 최신 베타(pre-release) 릴리즈 정보 (캐싱 적용)
- *  안정 버전이 베타보다 높으면 안정 버전을 반환 */
-export async function getLatestBetaRelease(): Promise<ReleaseInfo | null> {
-  const now = Date.now();
-
-  if (cachedBetaRelease && now - cachedBetaAt < CACHE_TTL_MS) {
-    return cachedBetaRelease;
-  }
-
-  try {
-    const [betaRelease, stableRelease] = await Promise.all([
-      fetchLatestPreRelease(),
-      fetchLatestRelease(),
-    ]);
-
-    const beta = betaRelease ? toReleaseInfo(betaRelease) : null;
-    const stable = toReleaseInfo(stableRelease);
-
-    // 베타가 없거나 안정 버전이 더 높으면 안정 버전 반환
-    const result =
-      !beta || compareVersions(stable.version, beta.version) > 0 ? stable : beta;
-
-    cachedBetaRelease = result;
-    cachedBetaAt = now;
-
-    return cachedBetaRelease;
-  } catch (e) {
-    // GitHub 호출 실패(레이트 리밋 등) — 만료된 캐시라도 있으면 502 대신 그것을 반환
-    if (cachedBetaRelease) {
-      console.warn("GitHub fetch failed, serving stale beta cache:", e);
-      cachedBetaAt = now - CACHE_TTL_MS + STALE_RETRY_MS;
-      return cachedBetaRelease;
-    }
-    throw e;
-  }
-}
-
-/** 캐시 강제 무효화 */
-export function invalidateCache(): void {
-  cachedRelease = null;
-  cachedAt = 0;
-  cachedBetaRelease = null;
-  cachedBetaAt = 0;
+  return result;
 }
