@@ -1,3 +1,10 @@
+# 이 프로젝트의 의존성 기준은 npm(package-lock.json)이고 Railway도 npm ci를 쓴다.
+# pnpm 11은 `pnpm run` 앞에 의존성을 검증하고 어긋나면 **자동으로 재설치**하는데,
+# 그때 npm이 깔아둔 패키지를 node_modules/.ignored로 치우고 pnpm 레이아웃으로
+# 갈아엎는다(실행 중이던 서버의 네이티브 바인딩까지 교체돼 500이 났다).
+# `pnpm dev:local`을 명령 실행기로만 쓰기 위해 이 검증을 끈다.
+verifyDepsBeforeRun: false
+
 allowBuilds:
   better-sqlite3: true
   esbuild: true

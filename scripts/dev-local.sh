@@ -12,9 +12,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-API_PORT="${PORT:-3000}"
 WEB_PORT=5173
 ENV_FILE="$ROOT/.env"
+
+# .env에서 키 하나를 읽는다. Node의 --env-file은 **셸에 이미 있는 값을 덮지 않아**,
+# 스크립트가 export한 값이 .env보다 우선한다. 그래서 PORT·DB_PATH처럼 여기서도
+# 다루는 키는 .env 값을 먼저 읽어 존중해야 조용히 무시되는 일이 없다.
+env_value() {
+  [ -f "$ENV_FILE" ] || return 0
+  sed -nE "s/^$1=[\"']?([^\"']*)[\"']?[[:space:]]*$/\1/p" "$ENV_FILE" | tail -1
+}
 
 API_ONLY=0
 for arg in "$@"; do
@@ -27,7 +34,10 @@ done
 fail() { echo "✗ $1" >&2; shift; for l in "$@"; do echo "  $l" >&2; done; exit 1; }
 
 # --- 의존성 프리플라이트 -----------------------------------------------------
-[ -d node_modules ] || fail "의존성이 설치되지 않았습니다." "pnpm install"
+# 의존성 기준은 npm(package-lock.json)이다. Railway 빌드도 npm ci를 쓴다.
+# pnpm으로 설치해도 돌아가지만(pnpm-workspace.yaml의 allowBuilds 참고) 버전이
+# 갈릴 수 있으므로 설치는 npm으로 맞추는 것을 권한다.
+[ -d node_modules ] || fail "의존성이 설치되지 않았습니다." "npm ci"
 
 # pnpm 10+는 네이티브 빌드 스크립트를 기본 차단한다. better-sqlite3가 이에 걸리면
 # 서버가 부팅 중 "Could not locate the bindings file"로 죽는다 — 미리 잡는다.
@@ -36,10 +46,12 @@ fail() { echo "✗ $1" >&2; shift; for l in "$@"; do echo "  $l" >&2; done; exit
 # require는 멀쩡히 성공한다. 실제 사용 시점까지 흉내 내야 의미가 있다.
 if ! node -e "new (require('better-sqlite3'))(':memory:')" >/dev/null 2>&1; then
   fail "better-sqlite3 네이티브 바인딩을 불러올 수 없습니다." \
-       "pnpm이 빌드 스크립트를 차단했을 가능성이 큽니다:" \
+       "npm으로 다시 설치하면 해결됩니다 (이 프로젝트의 기준):" \
+       "  npm ci" \
+       "pnpm으로 설치했다면 빌드 스크립트가 차단된 것입니다:" \
        "  pnpm rebuild better-sqlite3" \
-       "(pnpm-workspace.yaml의 allowBuilds에 등록돼 있어야 합니다. pnpm 11부터" \
-       " package.json의 pnpm 필드는 무시됩니다.)"
+       "(pnpm-workspace.yaml의 allowBuilds 참고. pnpm 11부터 package.json의" \
+       " pnpm 필드는 무시됩니다.)"
 fi
 
 # vite 8의 번들러(rolldown) 네이티브 바인딩 — 없으면 콘솔 빌드가 죽는다.
@@ -52,6 +64,19 @@ ENV_ARG=()
 if [ -f "$ENV_FILE" ]; then
   ENV_ARG=(--env-file="$ENV_FILE")
   echo "✓ .env 로드"
+
+  # 따옴표가 안 닫힌 줄은 Node의 --env-file이 **다음 줄을 값으로 삼켜버린다.**
+  # 그러면 뒤 변수가 통째로 사라지는데 아무 에러도 안 난다 — 미리 잡는다.
+  UNBALANCED="$(awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/ {
+      v = substr($0, index($0, "=") + 1)
+      n = gsub(/"/, "\"", v)
+      if (n % 2 == 1) print NR": "$1
+    }' "$ENV_FILE")"
+  if [ -n "$UNBALANCED" ]; then
+    fail ".env에 따옴표가 닫히지 않은 줄이 있습니다." \
+         "$UNBALANCED" \
+         "이 상태면 Node가 다음 줄까지 값으로 삼켜 뒤 변수가 조용히 사라집니다."
+  fi
 
   if ! grep -qE '^(ADMIN_PASSWORD|STATS_PASSWORD)=.+' "$ENV_FILE"; then
     echo "⚠ ADMIN_PASSWORD가 비어 있어 관리 콘솔이 비활성화됩니다 (.env에 추가하세요)."
@@ -67,10 +92,20 @@ else
   echo "⚠ .env가 없습니다 (cp .env.example .env). 환경변수 없이 시작합니다."
 fi
 
-# 로컬 DB는 운영 파일과 절대 섞이지 않게 .data/ 아래에 따로 둔다.
-mkdir -p "$ROOT/.data"
-export DB_PATH="${DB_PATH:-$ROOT/.data/dev.db}"
-echo "✓ DB: $DB_PATH"
+# 포트·DB 경로는 셸 > .env > 기본값 순으로 정한다.
+API_PORT="${PORT:-$(env_value PORT)}"
+API_PORT="${API_PORT:-3000}"
+
+DB_PATH="${DB_PATH:-$(env_value DB_PATH)}"
+if [ -z "$DB_PATH" ]; then
+  # 아무 데도 지정이 없을 때만 로컬 전용 위치를 쓴다.
+  DB_PATH="$ROOT/.data/dev.db"
+  echo "✓ DB: $DB_PATH (기본값 — .env의 DB_PATH로 바꿀 수 있습니다)"
+else
+  echo "✓ DB: $DB_PATH"
+fi
+mkdir -p "$(dirname "$DB_PATH")"
+export DB_PATH
 
 # --- 실행 --------------------------------------------------------------------
 PIDS=()

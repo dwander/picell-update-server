@@ -3,3 +3,6 @@ dist/
 *.db
 .env
 .data/
+
+# 의존성 기준은 package-lock.json(npm). pnpm으로 설치하면 생기지만 추적하지 않는다.
+pnpm-lock.yaml

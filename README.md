@@ -23,13 +23,19 @@ PiCell One 데스크톱 앱의 **업데이트 배포 서버 + 관리 콘솔**입
 ## 빠른 시작
 
 ```bash
-pnpm install
+npm ci                  # 의존성 기준은 npm (package-lock.json)
 cp .env.example .env    # ADMIN_PASSWORD와 STORAGE_* 채우기
 
 pnpm dev:local          # API(3000) + 콘솔 HMR(5173) 한 번에 → http://localhost:5173/admin
 pnpm build && pnpm start     # 프로덕션 빌드 후 실행 → http://localhost:3000/admin
 pnpm typecheck          # tsc + svelte-check
 ```
+
+> **설치는 npm으로 맞춥니다.** Railway 빌드가 `npm ci`를 쓰므로 로컬도 같은
+> 락파일을 따라야 운영과 버전이 갈리지 않습니다. 스크립트 실행은 `pnpm run`이든
+> `npm run`이든 동일하게 동작합니다(스크립트에 패키지 매니저 호출이 없습니다).
+> `pnpm install`로 설치해도 돌아가긴 하지만(`pnpm-workspace.yaml`의 `allowBuilds`가
+> 네이티브 빌드를 허용) `pnpm-lock.yaml`은 추적하지 않습니다.
 
 `dev:local`은 두 프로세스를 함께 띄우고 로그에 `[api]` / `[web]` 프리픽스를 붙이며,
 Ctrl+C 한 번에 둘 다 정리합니다. 한쪽이 죽으면 나머지도 내려 반쪽만 떠 있는 상태를
