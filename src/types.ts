@@ -129,8 +129,13 @@ export interface ReleaseSummaryDTO {
 export interface UpdateCheckResponse {
   updateAvailable: boolean;
   channel: Channel;
-  /** 강제 업데이트 여부 — 릴리즈 플래그 또는 minSupportedVersion 미달 */
+  /**
+   * 강제 업데이트 여부. 최신 릴리즈뿐 아니라 **현재 버전과 최신 사이의 릴리즈**가
+   * 건 조건까지 반영한다(중간 릴리즈의 강제 지정이 이후 릴리즈로 승계된다).
+   */
   mandatory: boolean;
+  /** 강제 조건을 처음 건 릴리즈 버전. mandatory가 false면 null. */
+  mandatorySince: string | null;
   latest: {
     version: string;
     name: string;

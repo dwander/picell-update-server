@@ -326,6 +326,46 @@ export function pickArtifact(
   );
 }
 
+export interface MandatoryResolution {
+  required: boolean;
+  /** 강제 조건을 처음 건 릴리즈 버전. 클라이언트가 이유를 안내하는 데 쓴다. */
+  since: string | null;
+}
+
+/**
+ * 강제 업데이트 여부를 **현재 버전과 최신 버전 사이 구간 전체**로 판정한다.
+ *
+ * 최신 릴리즈의 플래그만 보면, 중간 릴리즈에 걸어둔 강제 조건이 다음 릴리즈를
+ * 올리는 순간 조용히 사라진다 — 1.5.0을 필수로 지정해도 1.6.0을 그냥 내보내면
+ * 1.0.0 사용자는 거절 가능한 안내만 받고 미지원 버전에 남는다.
+ * 그래서 (현재, 최신] 구간에 강제 조건을 건 릴리즈가 하나라도 있으면 강제로 본다.
+ * **받는 파일은 여전히 최신본 하나**다 — 중간 버전을 거쳐 올라가지 않는다.
+ *
+ * 플랫폼은 따지지 않는다. "이 버전 미만은 지원하지 않는다"는 선언은 특정 플랫폼에
+ * 빌드가 있었는지와 무관한 정책이기 때문이다.
+ */
+export function resolveMandatory(
+  channel: Channel,
+  currentVersion: string,
+  latestVersion: string,
+): MandatoryResolution {
+  const triggers = listPublishedRows(channel)
+    .filter(
+      (r) =>
+        compareVersions(r.version, currentVersion) > 0 &&
+        compareVersions(r.version, latestVersion) <= 0 &&
+        (r.mandatory ||
+          (r.minSupportedVersion
+            ? compareVersions(currentVersion, r.minSupportedVersion) < 0
+            : false)),
+    )
+    // 가장 낮은(먼저 조건을 건) 릴리즈를 근거로 남긴다.
+    .sort((a, b) => compareVersions(a.version, b.version));
+
+  const first = triggers[0];
+  return { required: Boolean(first), since: first?.version ?? null };
+}
+
 /** 발행된 릴리즈를 최신순으로 (체인지로그 피드용). */
 export function listPublishedRows(channel: Channel): ReleaseRow[] {
   const candidateChannels: Channel[] = channel === "beta" ? ["beta", "stable"] : ["stable"];

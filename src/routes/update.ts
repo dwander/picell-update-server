@@ -9,6 +9,7 @@ import {
   listPublishedRows,
   pickArtifact,
   resolveLatest,
+  resolveMandatory,
 } from "../services/releases.js";
 import { recordCheck, recordDownload } from "../services/stats.js";
 import { isInRollout } from "../services/rollout.js";
@@ -93,6 +94,7 @@ updateRouter.get("/check", (c) => {
       updateAvailable: false,
       channel,
       mandatory: false,
+      mandatorySince: null,
       latest: null,
     };
     return c.json(empty);
@@ -103,20 +105,19 @@ updateRouter.get("/check", (c) => {
   const inRollout = isInRollout(release.rolloutPercent, release.version, machineId);
   const changelog = getChangelog(release.id, locale);
 
-  const mandatory =
-    newer &&
-    (release.mandatory ||
-      (release.minSupportedVersion
-        ? compareVersions(currentVersion, release.minSupportedVersion) < 0
-        : false));
+  // 최신본의 플래그만 보지 않고 (현재, 최신] 구간 전체를 본다.
+  const mandatoryInfo = newer
+    ? resolveMandatory(channel, currentVersion, release.version)
+    : { required: false, since: null };
 
   // 단계적 배포에서 빠진 클라이언트에게도 릴리즈 정보 자체는 준다(`updateAvailable`만
   // false). 앱이 최신 상태를 정확히 표시할 수 있고, 강제 업데이트 대상이면 rollout과
   // 무관하게 내보낸다.
   const response: UpdateCheckResponse = {
-    updateAvailable: newer && (inRollout || mandatory),
+    updateAvailable: newer && (inRollout || mandatoryInfo.required),
     channel,
-    mandatory,
+    mandatory: mandatoryInfo.required,
+    mandatorySince: mandatoryInfo.since,
     latest: {
       version: release.version,
       name: release.name,

@@ -229,7 +229,7 @@
 
       <Field
         label="최소 지원 버전"
-        hint="이 버전 미만 사용자는 강제 업데이트 대상이 됩니다. 비우면 미적용."
+        hint={"이 버전 미만 사용자만 강제 업데이트 대상. 비우면 미적용.\n이후 릴리즈를 올려도 계속 적용됩니다."}
       >
         <input
           bind:value={meta.minSupportedVersion}
@@ -238,7 +238,7 @@
         />
       </Field>
 
-      <div class="flex items-end">
+      <div>
         <label class="flex cursor-pointer items-center gap-2 py-2 text-sm text-ink-muted">
           <input
             type="checkbox"
@@ -247,6 +247,9 @@
           />
           강제 업데이트
         </label>
+        <span class="block text-xs whitespace-pre-line text-ink-faint">
+          {"이 릴리즈보다 낮은 모든 버전이 대상.\n이후 릴리즈를 올려도 계속 적용됩니다."}
+        </span>
       </div>
     </div>
   </Card>
