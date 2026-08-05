@@ -1,14 +1,15 @@
 // 자동 채우기 도구 — 손으로 적던 값을 파일에서 유추한다.
 //   1) 설치 파일명 → 버전·표시 이름·플랫폼
-//   2) changelog.txt → 버전별 릴리즈 노트 (미리보기 후 일괄 반영)
+//   2) changelog.txt → 버전별 릴리즈 노트 (릴리즈 편집 화면이 자기 버전만 골라 쓴다)
+//
+// 파싱만 하고 쓰기는 하지 않는다. 반영은 사람이 편집기에서 확인한 뒤
+// PUT /releases/:id/changelog/:locale로 저장하는 경로 하나뿐이다.
 
 import { Hono } from "hono";
 import { ReleaseError, getReleaseRowByVersion } from "../../services/releases.js";
 import { inspectFileName } from "../../services/artifact-naming.js";
 import { parseChangelogFile } from "../../services/changelog-import.js";
-import { saveChangelog } from "../../services/changelog.js";
-import { logAction } from "../../services/audit.js";
-import { clientIp, handle, readJson, requireString } from "../helpers.js";
+import { handle, readJson, requireString } from "../helpers.js";
 import { isLocale, type ChangelogImportEntryDTO, type Locale } from "../../types.js";
 
 /** 파일 하나가 통째로 JSON 본문에 실려 온다. 방어적 상한. */
@@ -32,7 +33,7 @@ importRouter.post("/inspect/filename", (c) =>
   }),
 );
 
-function buildPreview(text: string, locale: Locale): ChangelogImportEntryDTO[] {
+function buildEntries(text: string): ChangelogImportEntryDTO[] {
   if (text.length > MAX_CHANGELOG_CHARS) {
     throw new ReleaseError("체인지로그 파일이 너무 큽니다.");
   }
@@ -59,52 +60,18 @@ function buildPreview(text: string, locale: Locale): ChangelogImportEntryDTO[] {
   });
 }
 
-/** POST /admin/api/changelog/parse — 미리보기 (쓰기 없음) */
+/** POST /admin/api/changelog/parse — 버전 블록으로 갈라 돌려준다 (쓰기 없음) */
 importRouter.post("/changelog/parse", (c) =>
   handle(c, async () => {
     const body = await readJson<{ text?: unknown; locale?: unknown }>(c);
     const text = requireString(body.text, "text");
     const locale: Locale = isLocale(body.locale) ? body.locale : "ko";
-    const entries = buildPreview(text, locale);
+    const entries = buildEntries(text);
     return {
       locale,
       entries,
       matched: entries.filter((e) => e.releaseId).length,
       unmatched: entries.filter((e) => !e.releaseId && !e.isLatest).length,
     };
-  }),
-);
-
-/**
- * POST /admin/api/changelog/apply — 매칭된 릴리즈에 일괄 반영.
- * versions를 주면 그 버전만, 없으면 매칭된 전부.
- * 원문 마크다운과 파싱된 항목을 함께 저장한다 — 클라이언트에는 원문이 나가고,
- * 항목은 구조화 표시용으로 남는다.
- */
-importRouter.post("/changelog/apply", (c) =>
-  handle(c, async () => {
-    const body = await readJson<{ text?: unknown; locale?: unknown; versions?: unknown }>(c);
-    const text = requireString(body.text, "text");
-    const locale: Locale = isLocale(body.locale) ? body.locale : "ko";
-    const only = Array.isArray(body.versions)
-      ? new Set(body.versions.filter((v): v is string => typeof v === "string"))
-      : null;
-
-    const entries = buildPreview(text, locale).filter(
-      (e) => e.releaseId && (!only || (e.version && only.has(e.version))),
-    );
-
-    const applied: string[] = [];
-    for (const entry of entries) {
-      if (!entry.releaseId || !entry.version) continue;
-      saveChangelog(entry.releaseId, locale, {
-        bodyMarkdown: entry.markdown,
-        items: entry.items,
-      });
-      applied.push(entry.version);
-    }
-
-    logAction("changelog.import", `${applied.length}건`, { locale, versions: applied }, clientIp(c));
-    return { applied, appliedCount: applied.length };
   }),
 );

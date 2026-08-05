@@ -193,6 +193,7 @@ export const api = {
 
   inspectFileName: (fileName: string) =>
     post<InspectedFileNameDTO>("/inspect/filename", { fileName }),
+  /** changelog.txt를 버전 블록으로 갈라 돌려준다. 저장하지 않는다. */
   parseChangelog: (text: string, locale: Locale) =>
     post<{
       locale: Locale;
@@ -200,12 +201,6 @@ export const api = {
       matched: number;
       unmatched: number;
     }>("/changelog/parse", { text, locale }),
-  applyChangelog: (text: string, locale: Locale, versions?: string[]) =>
-    post<{ applied: string[]; appliedCount: number }>("/changelog/apply", {
-      text,
-      locale,
-      ...(versions ? { versions } : {}),
-    }),
 
   auditLogs: () =>
     get<{

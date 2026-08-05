@@ -263,9 +263,14 @@
     />
   </Card>
 
-  <Card title="체인지로그" padded={false}>
+  <Card
+    title="체인지로그"
+    subtitle="changelog.txt를 끌어다 놓으면 이 버전 부분만 가져옵니다."
+    padded={false}
+  >
     <ChangelogEditor
       {releaseId}
+      version={release.version}
       changelogs={release.changelogs}
       onsaved={(changelog) => {
         if (!release) return;
