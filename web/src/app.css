@@ -68,6 +68,23 @@ body {
 .markdown ul { margin: 0.4em 0; padding-left: 1.2em; list-style: disc; }
 .markdown ol { margin: 0.4em 0; padding-left: 1.2em; list-style: decimal; }
 .markdown li { margin: 0.2em 0; color: var(--color-ink-muted); }
+/* 항목에 딸린 세부 설명(원문의 `·`). 원문 표기를 유지하려고 마커를 직접 그린다 —
+   ::marker의 content는 브라우저 지원이 고르지 않다. */
+.markdown ul ul {
+  list-style: none;
+  margin: 0.15em 0;
+  padding-left: 0.9em;
+}
+.markdown ul ul > li {
+  position: relative;
+  padding-left: 0.85em;
+  color: var(--color-ink-faint);
+}
+.markdown ul ul > li::before {
+  content: "·";
+  position: absolute;
+  left: 0;
+}
 .markdown a { color: var(--color-accent); text-decoration: underline; }
 .markdown code {
   font-family: var(--font-mono);

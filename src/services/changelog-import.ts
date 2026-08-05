@@ -37,6 +37,8 @@ const DEFAULT_TYPE: ChangelogType = "changed";
 const VERSION_HEADING_RE = /^##\s*\[([^\]]+)\]\s*(.*)$/;
 const CATEGORY_HEADING_RE = /^###\s*(.+)$/;
 const BULLET_RE = /^[-*+]\s+(.+)$/;
+/** 항목에 딸린 세부 설명. 앱은 가운뎃점으로 적는다. */
+const SUB_BULLET_RE = /^[·•∙◦・‧]\s*(.+)$/;
 
 export function categoryToType(category: string): ChangelogType {
   const key = category.trim();
@@ -120,6 +122,15 @@ export function parseChangelogFile(text: string): ParsedChangelogVersion[] {
       current.items.push({ type: currentType, text: itemText });
       const section = sections[sections.length - 1];
       if (section) section.lines.push(`- ${itemText}`);
+      continue;
+    }
+
+    // 세부 설명은 마크다운에만 원문 그대로 남긴다. 항목(items)은 배지·요약용이라
+    // 상위 불릿만 담고, 렌더 시 renderNotes가 하위 목록으로 바꾼다.
+    const subBullet = SUB_BULLET_RE.exec(line);
+    if (subBullet?.[1]) {
+      const section = sections[sections.length - 1];
+      if (section) section.lines.push(`· ${subBullet[1].trim()}`);
     }
   }
   flush();

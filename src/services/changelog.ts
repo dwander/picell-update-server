@@ -55,6 +55,29 @@ export function itemsToMarkdown(
   return sections.join("\n\n");
 }
 
+/**
+ * `· 세부 항목` 줄을 하위 목록으로 바꾼다.
+ *
+ * 앱 changelog.txt는 항목 아래 딸린 설명을 가운뎃점으로 적는다. 마크다운에는
+ * 그런 불릿 문자가 없어서 그대로 두면 앞 항목에 이어붙은 한 문단이 되어 버린다
+ * (들여쓰기도 줄바꿈도 사라진다). 저장은 사람이 쓴 원문 그대로 두고 **렌더 직전에만**
+ * 두 칸 들여쓴 `- `로 바꿔 중첩 리스트로 만든다.
+ *
+ * 콘솔 미리보기는 저장 전 초안을 그리므로 같은 규칙이 web/src/lib/markdown.ts에도 있다.
+ * 한쪽을 고치면 반드시 다른 쪽도 같이 고칠 것.
+ */
+const SUB_BULLET_RE = /^\s*[·•∙◦・‧]\s*(.+)$/;
+
+export function normalizeSubBullets(markdown: string): string {
+  return markdown
+    .split("\n")
+    .map((line) => {
+      const sub = SUB_BULLET_RE.exec(line);
+      return sub?.[1] ? `  - ${sub[1].trim()}` : line;
+    })
+    .join("\n");
+}
+
 /** 클라이언트에 나갈 최종 노트. 직접 쓴 마크다운 > 항목 생성본. */
 export function renderNotes(
   bodyMarkdown: string,
@@ -62,7 +85,7 @@ export function renderNotes(
   locale: Locale,
 ): string {
   const body = bodyMarkdown.trim();
-  return body || itemsToMarkdown(items, locale);
+  return normalizeSubBullets(body || itemsToMarkdown(items, locale));
 }
 
 // ─── 조회 ────────────────────────────────────────────────────────────────────
