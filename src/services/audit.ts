@@ -5,6 +5,7 @@ import { db } from "../db/index.js";
 import { auditLogs } from "../db/schema.js";
 import { desc, sql } from "drizzle-orm";
 
+// 바꾸면 도구 페이지 "감사 로그" 카드의 설명 문구도 함께 고칠 것.
 const RETENTION_ROWS = 2000;
 
 export function logAction(

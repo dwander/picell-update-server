@@ -148,7 +148,11 @@
   {/if}
 </Card>
 
-<Card title="감사 로그" subtitle="발행·삭제 등 되돌리기 어려운 조작 기록" padded={false}>
+<Card
+  title="감사 로그"
+  subtitle="발행·삭제 등 되돌리기 어려운 조작 기록 · 최근 200개까지만 표시하며, DB에는 최근 2000행이 남습니다."
+  padded={false}
+>
   {#if logs.length === 0}
     <EmptyState title="기록이 없습니다." />
   {:else}

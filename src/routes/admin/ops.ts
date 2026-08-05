@@ -11,6 +11,7 @@ import { ReleaseError } from "../../services/releases.js";
 import { clientIp, handle, readJson, requireString } from "../helpers.js";
 import { isLocale } from "../../types.js";
 
+// 바꾸면 도구 페이지 "감사 로그" 카드의 설명 문구도 함께 고칠 것.
 const AUDIT_LIMIT = 200;
 
 export const opsRouter = new Hono();
