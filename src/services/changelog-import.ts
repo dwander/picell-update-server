@@ -4,6 +4,7 @@
 //   ## [0.5.33] 2026-07-18
 //   ### 개선
 //   - 항목
+//     - 항목에 딸린 세부 설명 (가운뎃점으로 적기도 한다)
 //   ### 새 기능
 //   - 항목
 //
@@ -39,6 +40,8 @@ const CATEGORY_HEADING_RE = /^###\s*(.+)$/;
 const BULLET_RE = /^[-*+]\s+(.+)$/;
 /** 항목에 딸린 세부 설명. 앱은 가운뎃점으로 적는다. */
 const SUB_BULLET_RE = /^[·•∙◦・‧]\s*(.+)$/;
+/** 들여쓴 줄. 불릿이든 가운뎃점이든 앞 항목에 딸린 세부 설명으로 본다. */
+const INDENTED_RE = /^[ \t]+\S/;
 
 export function categoryToType(category: string): ChangelogType {
   const key = category.trim();
@@ -119,8 +122,16 @@ export function parseChangelogFile(text: string): ParsedChangelogVersion[] {
     if (bullet?.[1]) {
       const itemText = bullet[1].trim();
       if (!itemText) continue;
-      current.items.push({ type: currentType, text: itemText });
       const section = sections[sections.length - 1];
+      // 들여쓴 불릿은 새 항목이 아니라 바로 위 항목의 세부 설명이다. 가운뎃점과 같은
+      // 취급으로 하위 목록에 넣는다 — 두 단계 이상 들여써도 한 단계로 눕힌다
+      // (클라이언트가 받는 노트는 한 단계 중첩까지만 쓴다).
+      // 앞선 항목이 없으면(섹션 첫 줄부터 들여쓴 경우) 상위 항목으로 받아 흘리지 않는다.
+      if (INDENTED_RE.test(rawLine) && section && section.lines.length > 0) {
+        section.lines.push(`  - ${itemText}`);
+        continue;
+      }
+      current.items.push({ type: currentType, text: itemText });
       if (section) section.lines.push(`- ${itemText}`);
       continue;
     }
