@@ -1,12 +1,26 @@
 import { db } from "../db/index.js";
-import { downloads, installs } from "../db/schema.js";
-import { sql, eq, and, desc } from "drizzle-orm";
-import type { StatsResponse } from "../types.js";
+import { checkLog, downloads, installs } from "../db/schema.js";
+import { sql, eq, and, desc, gte } from "drizzle-orm";
+import type { ActivityResponse, StatsResponse } from "../types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DAILY_WINDOW_DAYS = 30;
 /** 이 기간 안에 업데이트 확인을 보낸 설치본을 "활성"으로 본다. */
 const ACTIVE_INSTALL_DAYS = 14;
+/** 활성 사용자 집계 기본 창(오늘 포함). 바꾸면 통계 화면의 설명 문구도 함께 고칠 것. */
+export const ACTIVITY_WINDOW_DAYS = 30;
+/** 활동 로그가 남은 PC 목록에서 표에 내려보낼 최대 행 수. */
+export const ACTIVITY_MACHINE_LIMIT = 200;
+
+/** 활동 로그의 날짜 키. 기존 일별 집계(`date(…, 'unixepoch')`)와 같은 UTC 기준. */
+function dayKey(at: Date): string {
+  return at.toISOString().slice(0, 10);
+}
+
+/** `days`일 전(오늘 포함)의 날짜 키 — `dayKey(now)`가 1일째다. */
+function cutoffDay(days: number): string {
+  return dayKey(new Date(Date.now() - (days - 1) * DAY_MS));
+}
 
 interface RecordDownloadParams {
   version: string;
@@ -59,12 +73,43 @@ interface RecordCheckParams {
 }
 
 /**
- * 업데이트 확인 핑을 설치 현황으로 누적한다. machineId당 1행만 유지하므로
- * 테이블이 무한히 커지지 않으면서 "어떤 버전이 실제로 돌고 있는지"를 알 수 있다
- * (다운로드 수만으로는 설치 후 롤백·재설치를 구분할 수 없다).
+ * 업데이트 확인 핑을 기록한다. 두 곳에 남긴다:
+ *
+ * - `installs` — machineId당 1행(덮어쓰기). "지금 어떤 버전이 돌고 있나"의 스냅샷.
+ * - `check_log` — (날짜 × machineId)당 1행(영구). "언제 살아 있었나"의 시간축.
+ *
+ * 스냅샷만으로는 활성 사용자 추이를 낼 수 없고(과거가 덮여 사라진다), 로그만으로는
+ * 현재 버전 분포를 뽑기 번거로워 둘 다 남긴다.
  */
 export function recordCheck(params: RecordCheckParams): void {
   const now = new Date();
+
+  db.insert(checkLog)
+    .values({
+      day: dayKey(now),
+      machineId: params.machineId,
+      version: params.version,
+      channel: params.channel,
+      platform: params.platform,
+      arch: params.arch ?? null,
+      checks: 1,
+      firstAt: now,
+      lastAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [checkLog.day, checkLog.machineId],
+      set: {
+        // 하루 안에 업데이트가 끝나면 버전이 바뀐다 — 그날 마지막 값을 남긴다.
+        version: params.version,
+        channel: params.channel,
+        platform: params.platform,
+        arch: params.arch ?? null,
+        lastAt: now,
+        checks: sql`${checkLog.checks} + 1`,
+      },
+    })
+    .run();
+
   db.insert(installs)
     .values({
       machineId: params.machineId,
@@ -92,6 +137,121 @@ export function recordCheck(params: RecordCheckParams): void {
       },
     })
     .run();
+}
+
+// ─── 활성 사용자 (check_log 기반) ────────────────────────────────────────────
+
+/** 최근 `days`일(오늘 포함) 안에 한 번이라도 확인을 보낸 고유 PC 수. */
+function activeUsersWithin(days: number): number {
+  return (
+    db
+      .select({ count: sql<number>`count(distinct ${checkLog.machineId})` })
+      .from(checkLog)
+      .where(gte(checkLog.day, cutoffDay(days)))
+      .get()?.count ?? 0
+  );
+}
+
+function activeUserStats() {
+  const allTime =
+    db
+      .select({ count: sql<number>`count(distinct ${checkLog.machineId})` })
+      .from(checkLog)
+      .get()?.count ?? 0;
+
+  return {
+    today: activeUsersWithin(1),
+    last7Days: activeUsersWithin(7),
+    last30Days: activeUsersWithin(ACTIVITY_WINDOW_DAYS),
+    allTime,
+  };
+}
+
+function dailyActiveUsers(): { date: string; count: number }[] {
+  const rows = db
+    .select({ date: checkLog.day, count: sql<number>`count(distinct ${checkLog.machineId})` })
+    .from(checkLog)
+    .where(gte(checkLog.day, cutoffDay(DAILY_WINDOW_DAYS)))
+    .groupBy(checkLog.day)
+    .orderBy(checkLog.day)
+    .all();
+  return fillMissingDays(rows);
+}
+
+/**
+ * 활성 PC를 **현재 버전**(`installs`) 기준으로 센다. 로그의 버전으로 세면 기간 중
+ * 업데이트한 PC가 옛 버전과 새 버전 양쪽에 잡혀 합계가 활성 대수를 넘는다.
+ */
+function activeByVersion(): { version: string; count: number }[] {
+  return db
+    .select({ version: installs.version, count: sql<number>`count(*)` })
+    .from(installs)
+    .where(
+      sql`${installs.machineId} in (select machine_id from check_log where day >= ${cutoffDay(ACTIVITY_WINDOW_DAYS)})`,
+    )
+    .groupBy(installs.version)
+    .orderBy(desc(sql`count(*)`))
+    .all();
+}
+
+/**
+ * 활동 로그가 남은 PC 목록 — 최근 확인 순. "활성 사용자 N명"이 어떤 PC들인지
+ * 실제로 열어 볼 수 있어야 수치를 믿을 수 있다.
+ */
+export function getActivity(limit = ACTIVITY_MACHINE_LIMIT): ActivityResponse {
+  const since = cutoffDay(ACTIVITY_WINDOW_DAYS);
+
+  // PC마다 로그를 다시 훑는 상관 서브쿼리 대신 group by 한 번 + 조인.
+  // 타임스탬프는 초 단위 정수로 그대로 나오므로 여기서 ISO로 바꾼다.
+  const rows = db.all<{
+    machineId: string;
+    version: string;
+    channel: string;
+    platform: string;
+    arch: string | null;
+    firstSeenAt: number;
+    lastSeenAt: number;
+    checkCount: number;
+    activeDays: number;
+    totalDays: number;
+  }>(sql`
+    select i.machine_id as machineId, i.version as version, i.channel as channel,
+           i.platform as platform, i.arch as arch,
+           i.first_seen_at as firstSeenAt, i.last_seen_at as lastSeenAt,
+           i.check_count as checkCount,
+           coalesce(c.active_days, 0) as activeDays,
+           coalesce(c.total_days, 0) as totalDays
+      from installs i
+      left join (
+        select machine_id,
+               count(*) as total_days,
+               sum(case when day >= ${since} then 1 else 0 end) as active_days
+          from check_log
+         group by machine_id
+      ) c on c.machine_id = i.machine_id
+     order by i.last_seen_at desc
+     limit ${limit}
+  `);
+
+  const totalMachines = db.select({ count: sql<number>`count(*)` }).from(installs).get()?.count ?? 0;
+
+  return {
+    windowDays: ACTIVITY_WINDOW_DAYS,
+    limit,
+    totalMachines,
+    machines: rows.map((m) => ({
+      machineId: m.machineId,
+      version: m.version,
+      channel: m.channel,
+      platform: m.platform,
+      arch: m.arch,
+      firstSeenAt: new Date(m.firstSeenAt * 1000).toISOString(),
+      lastSeenAt: new Date(m.lastSeenAt * 1000).toISOString(),
+      checkCount: m.checkCount,
+      activeDays: m.activeDays,
+      totalDays: m.totalDays,
+    })),
+  };
 }
 
 function countSince(days: number): number {
@@ -174,6 +334,9 @@ export function getStats(): StatsResponse {
     daily: fillMissingDays(daily),
     installsByVersion,
     activeInstalls,
+    activeUsers: activeUserStats(),
+    dailyActiveUsers: dailyActiveUsers(),
+    activeByVersion: activeByVersion(),
   };
 }
 

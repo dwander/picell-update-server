@@ -70,7 +70,8 @@ updateRouter.get("/check", (c) => {
     return c.json({ error: "Missing version parameter" }, 400);
   }
 
-  // 설치 현황 집계는 실패해도 업데이트 확인을 막지 않는다.
+  // machineId + 현재 사용 버전을 활동 로그에 남긴다(활성 사용자 판정의 근거).
+  // 집계는 실패해도 업데이트 확인을 막지 않는다.
   if (machineId) {
     try {
       recordCheck({

@@ -164,6 +164,15 @@ export interface ChangelogFeedEntry {
 
 // ─── 통계 ────────────────────────────────────────────────────────────────────
 
+/** 업데이트 확인 활동 로그에서 나오는 고유 PC 수. 각 창은 오늘을 포함한다. */
+export interface ActiveUserStats {
+  today: number;
+  last7Days: number;
+  last30Days: number;
+  /** 로그가 시작된 이래 한 번이라도 확인을 보낸 PC */
+  allTime: number;
+}
+
 export interface StatsResponse {
   total: number;
   uniqueMachines: number;
@@ -174,7 +183,41 @@ export interface StatsResponse {
   byChannel: { channel: string; count: number }[];
   daily: { date: string; count: number }[];
   installsByVersion: { version: string; count: number }[];
+  /** 최근 14일 확인 기준. 구 `/api/stats` 소비자와의 호환으로 남긴다. */
   activeInstalls: number;
+  activeUsers: ActiveUserStats;
+  /** 일별 활성 PC (최근 30일, 빈 날은 0으로 채움) */
+  dailyActiveUsers: { date: string; count: number }[];
+  /** 최근 30일 활성 PC의 현재 버전 분포 */
+  activeByVersion: { version: string; count: number }[];
+}
+
+/** 활동 로그가 남은 PC 한 대. `/admin/api/activity` 전용. */
+export interface ActiveMachineDTO {
+  machineId: string;
+  /** 마지막으로 보고한 현재 사용 버전 */
+  version: string;
+  channel: string;
+  platform: string;
+  arch: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  /** 누적 업데이트 확인 횟수 */
+  checkCount: number;
+  /** 최근 30일 중 확인이 있었던 날 수 */
+  activeDays: number;
+  /** 로그 전체 기간 중 확인이 있었던 날 수 */
+  totalDays: number;
+}
+
+export interface ActivityResponse {
+  /** `activeDays`의 집계 창 */
+  windowDays: number;
+  /** `machines`에 담긴 최대 행 수 */
+  limit: number;
+  /** 로그가 남은 전체 PC 수 (limit과 무관) */
+  totalMachines: number;
+  machines: ActiveMachineDTO[];
 }
 
 // ─── 스토리지 ────────────────────────────────────────────────────────────────

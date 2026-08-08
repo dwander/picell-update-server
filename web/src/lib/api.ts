@@ -2,6 +2,7 @@
 // 서버 타입은 값이 아닌 `import type`으로만 가져온다 (규칙 10).
 
 import type {
+  ActivityResponse,
   ChangelogDTO,
   ChangelogType,
   Channel,
@@ -146,6 +147,7 @@ export const api = {
   // ─── 운영 ──────────────────────────────────────────────────────────────────
 
   stats: () => get<StatsResponse>("/stats"),
+  activity: () => get<ActivityResponse>("/activity"),
   changelogTimeline: (locale: Locale) =>
     get<{
       entries: {

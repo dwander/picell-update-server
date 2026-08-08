@@ -1,7 +1,7 @@
 // 운영 도구 — 통계, 스토리지 점검, GitHub 임포트, 감사 로그.
 
 import { Hono } from "hono";
-import { getStats } from "../../services/stats.js";
+import { ACTIVITY_MACHINE_LIMIT, getActivity, getStats } from "../../services/stats.js";
 import { cleanupOrphans, storageOverview } from "../../services/storage-admin.js";
 import { bucketName, isStorageConfigured, storagePrefix } from "../../services/storage.js";
 import { githubConfig, importRelease, isGithubConfigured, previewImport } from "../../services/github.js";
@@ -17,6 +17,9 @@ const AUDIT_LIMIT = 200;
 export const opsRouter = new Hono();
 
 opsRouter.get("/stats", (c) => handle(c, () => getStats()));
+
+/** GET /admin/api/activity — 업데이트 확인 로그가 남은 PC 목록 (최근 확인 순) */
+opsRouter.get("/activity", (c) => handle(c, () => getActivity(ACTIVITY_MACHINE_LIMIT)));
 
 /** GET /admin/api/changelog?locale=ko — 전체 릴리즈 노트 타임라인 */
 opsRouter.get("/changelog", (c) =>

@@ -75,6 +75,18 @@ const TABLES = [
      last_seen_at INTEGER NOT NULL DEFAULT (unixepoch()),
      check_count INTEGER NOT NULL DEFAULT 1
    )`,
+  `CREATE TABLE IF NOT EXISTS check_log (
+     day TEXT NOT NULL,
+     machine_id TEXT NOT NULL,
+     version TEXT NOT NULL,
+     channel TEXT NOT NULL DEFAULT 'stable',
+     platform TEXT NOT NULL,
+     arch TEXT,
+     checks INTEGER NOT NULL DEFAULT 1,
+     first_at INTEGER NOT NULL DEFAULT (unixepoch()),
+     last_at INTEGER NOT NULL DEFAULT (unixepoch()),
+     PRIMARY KEY (day, machine_id)
+   )`,
   `CREATE TABLE IF NOT EXISTS sessions (
      token_hash TEXT PRIMARY KEY,
      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -102,6 +114,7 @@ const INDEXES = [
   `CREATE INDEX IF NOT EXISTS downloads_version_machine_idx ON downloads (version, machine_id)`,
   `CREATE INDEX IF NOT EXISTS downloads_at_idx ON downloads (downloaded_at)`,
   `CREATE INDEX IF NOT EXISTS installs_last_seen_idx ON installs (last_seen_at)`,
+  `CREATE INDEX IF NOT EXISTS check_log_machine_idx ON check_log (machine_id)`,
   `CREATE INDEX IF NOT EXISTS audit_logs_at_idx ON audit_logs (created_at)`,
 ];
 
@@ -127,4 +140,22 @@ export function migrate(): void {
     }
   }
   for (const sql of INDEXES) rawDb.exec(sql);
+  seedCheckLog();
+}
+
+/**
+ * 활동 로그 도입 전에 쌓인 `installs`를 최근 확인 시각 하루치로 옮겨 심는다.
+ * 없으면 새 통계 화면이 며칠간 텅 빈 채로 보여 "집계가 안 되나" 오해를 부른다.
+ * 로그가 비어 있을 때만 돈다 — 운영 중 다시 돌아 과거를 덮어쓰는 일이 없도록.
+ */
+function seedCheckLog(): void {
+  const existing = rawDb.prepare(`SELECT count(*) AS n FROM check_log`).get() as { n: number };
+  if (existing.n > 0) return;
+  rawDb.exec(
+    `INSERT OR IGNORE INTO check_log
+       (day, machine_id, version, channel, platform, arch, checks, first_at, last_at)
+     SELECT date(last_seen_at, 'unixepoch'), machine_id, version, channel, platform, arch,
+            check_count, last_seen_at, last_seen_at
+       FROM installs`,
+  );
 }

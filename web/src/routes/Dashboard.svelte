@@ -63,9 +63,9 @@
       icon={Download}
     />
     <StatTile
-      label="활성 설치"
-      value={stats?.activeInstalls ?? 0}
-      hint="최근 14일 업데이트 확인 기준"
+      label="활성 사용자"
+      value={stats?.activeUsers.last30Days ?? 0}
+      hint="최근 30일 · 오늘 {formatNumber(stats?.activeUsers.today ?? 0)}대"
       icon={MonitorSmartphone}
     />
     <StatTile label="릴리즈" value={releases.length} hint="초안 {drafts.length}건" icon={Package} />

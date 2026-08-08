@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, uniqueIndex, index } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, uniqueIndex, index, primaryKey } from "drizzle-orm/sqlite-core";
 
 // ─── 릴리즈 ──────────────────────────────────────────────────────────────────
 // 릴리즈 메타의 1차 출처는 이 DB지만, 실제 바이너리는 R2(picell-one)에 있고
@@ -153,6 +153,45 @@ export const installs = sqliteTable(
   (t) => [index("installs_last_seen_idx").on(t.lastSeenAt)],
 );
 
+/**
+ * 업데이트 확인 활동 로그 — **지우지 않는 영구 기록**.
+ *
+ * `installs`는 machineId당 1행이라 "지금 몇 대가 살아 있나"만 알 수 있고 과거 활동은
+ * 덮여 사라진다. 활성 사용자 추이(오늘/7일/30일)를 보려면 시간축이 남아야 한다.
+ *
+ * 매 요청 1행이 아니라 **(날짜 × machineId)당 1행**이다. 클라이언트는 하루에도 여러 번
+ * 확인하므로 요청마다 남기면 행 수가 확인 주기에 끌려 다니고, 활성 사용자 판정에는
+ * "그날 살아 있었나"만 있으면 충분하다. 이 형태면 행 수가 (설치 대수 × 운영 일수)로
+ * 묶여 영구 보존해도 SQLite 파일이 감당한다.
+ */
+export const checkLog = sqliteTable(
+  "check_log",
+  {
+    /** YYYY-MM-DD (UTC). 기존 일별 집계가 전부 UTC라 기준을 맞춘다. */
+    day: text("day").notNull(),
+    machineId: text("machine_id").notNull(),
+    /** 그날 마지막으로 보고된 현재 사용 버전 */
+    version: text("version").notNull(),
+    channel: text("channel").notNull().default("stable"),
+    platform: text("platform").notNull(),
+    arch: text("arch"),
+    /** 그날 들어온 확인 횟수 */
+    checks: integer("checks").notNull().default(1),
+    firstAt: integer("first_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    lastAt: integer("last_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (t) => [
+    // (day, machine_id) 복합 PK가 날짜 범위 조회용 인덱스를 겸한다(day가 선두 컬럼).
+    primaryKey({ columns: [t.day, t.machineId] }),
+    // PC별 활동 일수 조회는 machine_id로 들어오므로 별도 인덱스가 필요하다.
+    index("check_log_machine_idx").on(t.machineId),
+  ],
+);
+
 // ─── 운영 ────────────────────────────────────────────────────────────────────
 
 /** 관리 콘솔 세션. 토큰은 해시로만 저장한다(DB 유출 시 세션 탈취 방지). */
@@ -186,3 +225,4 @@ export type ArtifactRow = typeof artifacts.$inferSelect;
 export type ChangelogRow = typeof changelogs.$inferSelect;
 export type ChangelogItemRow = typeof changelogItems.$inferSelect;
 export type InstallRow = typeof installs.$inferSelect;
+export type CheckLogRow = typeof checkLog.$inferSelect;
