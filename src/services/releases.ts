@@ -5,7 +5,7 @@
 import { db, newId } from "../db/index.js";
 import { artifacts, changelogs, downloads, releases } from "../db/schema.js";
 import type { ArtifactRow, ReleaseRow } from "../db/schema.js";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { compareVersions, isValidVersion, normalizeVersion } from "../version.js";
 import { deleteChangelogs, getChangelog } from "./changelog.js";
 import { deleteByPrefix } from "./storage.js";
@@ -15,6 +15,7 @@ import {
   type ArtifactDTO,
   type ArtifactKind,
   type Channel,
+  type DownloadCountAdjustment,
   type Locale,
   type Platform,
   type ReleaseDTO,
@@ -269,6 +270,114 @@ export async function deleteRelease(id: string): Promise<{ deletedObjects: numbe
   db.delete(releases).where(eq(releases.id, id)).run();
   // 다운로드 이력은 통계를 위해 남긴다(version 문자열로 계속 집계 가능).
   return { deletedObjects };
+}
+
+// ─── 다운로드 수 보정 ────────────────────────────────────────────────────────
+
+/**
+ * 보정으로 넣은 다운로드 행의 표시. `user_agent`는 어떤 집계에도 쓰이지 않아 표시를
+ * 넣어도 숫자가 흔들리지 않고, 나중에 실제 기록과 구분해 먼저 지울 수 있다.
+ */
+export const ADJUSTED_DOWNLOAD_UA = "admin:manual-adjust";
+
+/** 한 릴리즈에 지정할 수 있는 다운로드 수 상한. 오타 한 번에 행 수십만 개가 생기지 않게 막는다. */
+export const DOWNLOAD_COUNT_MAX = 10_000;
+
+/** 한 번의 insert에 담을 행 수 — SQLite 바인딩 파라미터 한도(32766) 안에 넉넉히 든다. */
+const INSERT_CHUNK = 500;
+
+/**
+ * 릴리즈의 다운로드 수를 `count`로 맞춘다. 통계 정리로 실수로 지운 기록을 되살리기 위한
+ * 보정 도구다 — 원래 행의 machineId·IP·시각은 복구할 수 없어 **숫자만** 맞춘다.
+ *
+ * 오프셋 칼럼 하나로 처리하지 않는 이유: 다운로드 집계가 버전별·플랫폼별·채널별·일별로
+ * 여러 벌인데 오프셋은 그중 일부에만 반영돼 카드끼리 숫자가 어긋난다. 실제 행을 넣고
+ * 빼면 기존 집계는 손대지 않아도 맞는다.
+ */
+export function setReleaseDownloadCount(id: string, count: number): DownloadCountAdjustment {
+  const row = requireReleaseRow(id);
+  if (!Number.isInteger(count) || count < 0 || count > DOWNLOAD_COUNT_MAX) {
+    throw new ReleaseError(`다운로드 수는 0 이상 ${DOWNLOAD_COUNT_MAX} 이하의 정수여야 합니다.`);
+  }
+
+  const current = countReleaseDownloads(id);
+  const diff = count - current;
+  if (diff === 0) return { version: row.version, downloadCount: current, added: 0, removed: 0 };
+
+  if (diff > 0) {
+    // 보정 행의 시각은 발행일로 둔다. 오늘로 찍으면 "일별 다운로드"에 없던 봉우리가 생긴다.
+    const at = row.publishedAt ?? row.createdAt;
+    const platform = inferDownloadPlatform(id);
+    db.transaction((tx) => {
+      for (let done = 0; done < diff; done += INSERT_CHUNK) {
+        const size = Math.min(INSERT_CHUNK, diff - done);
+        tx.insert(downloads)
+          .values(
+            Array.from({ length: size }, () => ({
+              version: row.version,
+              platform,
+              channel: row.channel,
+              arch: null,
+              releaseId: row.id,
+              artifactId: null,
+              ip: null,
+              userAgent: ADJUSTED_DOWNLOAD_UA,
+              machineId: null,
+              downloadedAt: at,
+            })),
+          )
+          .run();
+      }
+    });
+    return { version: row.version, downloadCount: count, added: diff, removed: 0 };
+  }
+
+  // 줄일 때는 보정 행부터 지운다. machineId·IP가 남은 실제 기록이 정보가 더 많아 오래
+  // 남길 가치가 있고, 그마저 지워야 할 때는 최근 것부터 — 되돌리기 쉬운 순서다.
+  db.run(sql`
+    delete from downloads
+     where id in (
+       select id from downloads
+        where release_id = ${row.id}
+        order by (case when user_agent = ${ADJUSTED_DOWNLOAD_UA} then 1 else 0 end) desc,
+                 downloaded_at desc, id desc
+        limit ${-diff}
+     )
+  `);
+  return { version: row.version, downloadCount: count, added: 0, removed: -diff };
+}
+
+function countReleaseDownloads(releaseId: string): number {
+  return (
+    db
+      .select({ count: sql<number>`count(*)` })
+      .from(downloads)
+      .where(eq(downloads.releaseId, releaseId))
+      .get()?.count ?? 0
+  );
+}
+
+/**
+ * 보정 행에 넣을 플랫폼. `platform`은 NOT NULL이라 무엇이든 정해야 하는데 틀린 값을
+ * 넣으면 "플랫폼별" 카드가 뒤틀린다. 남아 있는 기록의 최다 플랫폼 → 릴리즈 아티팩트의
+ * 플랫폼 → `unknown` 순으로 고른다.
+ */
+function inferDownloadPlatform(releaseId: string): string {
+  const fromDownloads = db
+    .select({ platform: downloads.platform, count: sql<number>`count(*)` })
+    .from(downloads)
+    .where(eq(downloads.releaseId, releaseId))
+    .groupBy(downloads.platform)
+    .orderBy(desc(sql`count(*)`))
+    .get();
+  if (fromDownloads) return fromDownloads.platform;
+
+  const fromArtifacts = db
+    .select({ platform: artifacts.platform })
+    .from(artifacts)
+    .where(eq(artifacts.releaseId, releaseId))
+    .get();
+  return fromArtifacts?.platform ?? "unknown";
 }
 
 // ─── 채널 해석 (클라이언트 업데이트 확인의 핵심) ─────────────────────────────

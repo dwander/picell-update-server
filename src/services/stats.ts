@@ -1,7 +1,7 @@
 import { db } from "../db/index.js";
 import { checkLog, downloads, installs } from "../db/schema.js";
-import { sql, eq, and, desc, gte } from "drizzle-orm";
-import type { ActivityResponse, StatsResponse } from "../types.js";
+import { sql, eq, and, desc, gte, inArray } from "drizzle-orm";
+import type { ActivityResponse, DownloadPruneResult, StatsResponse } from "../types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DAILY_WINDOW_DAYS = 30;
@@ -11,6 +11,11 @@ const ACTIVE_INSTALL_DAYS = 14;
 export const ACTIVITY_WINDOW_DAYS = 30;
 /** 활동 로그가 남은 PC 목록에서 표에 내려보낼 최대 행 수. */
 export const ACTIVITY_MACHINE_LIMIT = 200;
+/**
+ * 다운로드 정리에서 허용하는 기준값 상한. 정리 도구가 "사실상 전체 삭제" 버튼이
+ * 되지 않도록 막는 안전장치다. 바꾸면 통계 화면의 정리 팝업 문구도 함께 고칠 것.
+ */
+export const DOWNLOAD_PRUNE_MAX_THRESHOLD = 100;
 
 /** 활동 로그의 날짜 키. 기존 일별 집계(`date(…, 'unixepoch')`)와 같은 UTC 기준. */
 function dayKey(at: Date): string {
@@ -337,6 +342,43 @@ export function getStats(): StatsResponse {
     activeUsers: activeUserStats(),
     dailyActiveUsers: dailyActiveUsers(),
     activeByVersion: activeByVersion(),
+  };
+}
+
+/**
+ * 다운로드 수가 `maxCount` 이하인 버전의 기록을 지운다.
+ *
+ * 실사용자가 적은 동안에는 개발자가 직접 눌러 본 한두 건이 버전 목록을 가득 채워
+ * 정작 사용자가 받은 버전이 묻힌다. 버전 단위로만 지우는 이유는 기준이 눈에 보이는
+ * 집계와 정확히 일치해야(= 화면의 "버전별 다운로드" 막대) 무엇이 사라지는지 미리
+ * 확인할 수 있기 때문이다.
+ *
+ * `installs`·`check_log`는 건드리지 않는다 — 활성 사용자 집계의 시간축이고, 다운로드
+ * 기록과 달리 지우면 복구할 방법이 없다.
+ */
+export function pruneDownloadsByVersion(maxCount: number): DownloadPruneResult {
+  const victims = db
+    .select({ version: downloads.version, count: sql<number>`count(*)` })
+    .from(downloads)
+    .groupBy(downloads.version)
+    .having(sql`count(*) <= ${maxCount}`)
+    .orderBy(desc(sql`count(*)`))
+    .all();
+
+  if (victims.length === 0) return { versions: [], deletedRows: 0 };
+
+  db.delete(downloads)
+    .where(
+      inArray(
+        downloads.version,
+        victims.map((v) => v.version),
+      ),
+    )
+    .run();
+
+  return {
+    versions: victims,
+    deletedRows: victims.reduce((sum, v) => sum + v.count, 0),
   };
 }
 

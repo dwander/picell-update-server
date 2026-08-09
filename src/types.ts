@@ -220,6 +220,23 @@ export interface ActivityResponse {
   machines: ActiveMachineDTO[];
 }
 
+/** 다운로드 기록 정리 결과. 지운 버전을 그대로 돌려줘 화면이 무엇이 사라졌는지 알린다. */
+export interface DownloadPruneResult {
+  versions: { version: string; count: number }[];
+  deletedRows: number;
+}
+
+/** 릴리즈 다운로드 수 보정 결과. */
+export interface DownloadCountAdjustment {
+  version: string;
+  /** 보정 후 그 릴리즈의 다운로드 수 */
+  downloadCount: number;
+  /** 되살리려고 새로 넣은 행 수 */
+  added: number;
+  /** 줄이려고 지운 행 수 */
+  removed: number;
+}
+
 // ─── 스토리지 ────────────────────────────────────────────────────────────────
 
 export interface StorageObjectDTO {

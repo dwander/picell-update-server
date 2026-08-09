@@ -53,3 +53,23 @@ export function requireString(value: unknown, field: string): string {
   }
   return value.trim();
 }
+
+/**
+ * JSON 본문의 정수 필드. `Number()`로 먼저 바꾸지 않고 타입부터 보는 이유는
+ * `null`·`""`·`[]`가 모두 0으로 둔갑해, 값을 빼먹은 요청이 "0으로 맞춰라"가 되기 때문이다.
+ */
+export function requireInteger(
+  value: unknown,
+  field: string,
+  range: { min: number; max: number },
+): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < range.min ||
+    value > range.max
+  ) {
+    throw new ReleaseError(`${field}는 ${range.min} 이상 ${range.max} 이하의 정수여야 합니다.`);
+  }
+  return value;
+}

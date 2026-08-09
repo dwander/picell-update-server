@@ -6,6 +6,8 @@ import type {
   ChangelogDTO,
   ChangelogType,
   Channel,
+  DownloadCountAdjustment,
+  DownloadPruneResult,
   Locale,
   ReleaseDTO,
   ReleaseStatus,
@@ -109,6 +111,9 @@ export const api = {
   ) => patch<{ release: ReleaseDTO }>(`/releases/${id}`, input),
   deleteRelease: (id: string) =>
     del<{ deleted: boolean; deletedObjects: number }>(`/releases/${id}`),
+  /** 다운로드 수를 `count`로 맞춘다 — 지운 기록을 숫자만 되살리는 보정. */
+  setReleaseDownloadCount: (id: string, count: number) =>
+    patch<DownloadCountAdjustment>(`/releases/${id}/downloads`, { count }),
 
   saveChangelog: (
     id: string,
@@ -148,6 +153,9 @@ export const api = {
 
   stats: () => get<StatsResponse>("/stats"),
   activity: () => get<ActivityResponse>("/activity"),
+  /** 다운로드 수가 `maxCount` 이하인 버전의 기록을 지운다. 되돌릴 수 없다. */
+  pruneDownloads: (maxCount: number) =>
+    post<DownloadPruneResult>("/stats/downloads/prune", { maxCount }),
   changelogTimeline: (locale: Locale) =>
     get<{
       entries: {

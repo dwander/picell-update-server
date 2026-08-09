@@ -7,6 +7,8 @@
     Hash,
     History,
     MonitorSmartphone,
+    Settings,
+    Trash2,
     Users,
   } from "lucide-svelte";
   import { api } from "../lib/api.js";
@@ -15,14 +17,28 @@
   import Card from "../components/Card.svelte";
   import StatTile from "../components/StatTile.svelte";
   import BarChart from "../components/BarChart.svelte";
+  import VersionBars from "../components/VersionBars.svelte";
   import EmptyState from "../components/EmptyState.svelte";
+  import Modal from "../components/Modal.svelte";
+  import Button from "../components/Button.svelte";
+  import Field from "../components/Field.svelte";
   import type { ActivityResponse, StatsResponse } from "../../../src/types.js";
+
+  /** 서버의 DOWNLOAD_PRUNE_MAX_THRESHOLD와 같은 값 — 바꿀 때 함께 고칠 것. */
+  const PRUNE_MAX_THRESHOLD = 100;
+
+  const INPUT_CLASS =
+    "w-full rounded-lg border border-line bg-surface-0 px-3 py-2 text-sm text-ink outline-none focus:border-accent";
 
   let stats = $state<StatsResponse | null>(null);
   let activity = $state<ActivityResponse | null>(null);
   let loading = $state(true);
 
-  onMount(async () => {
+  let settingsOpen = $state(false);
+  let pruneInput = $state<number | null>(1);
+  let pruning = $state(false);
+
+  async function load(): Promise<void> {
     try {
       const [statsRes, activityRes] = await Promise.all([api.stats(), api.activity()]);
       stats = statsRes;
@@ -32,7 +48,9 @@
     } finally {
       loading = false;
     }
-  });
+  }
+
+  onMount(load);
 
   const daily = $derived(
     (stats?.daily ?? []).map((d) => ({ label: d.date.slice(5), value: d.count })),
@@ -41,10 +59,32 @@
     (stats?.dailyActiveUsers ?? []).map((d) => ({ label: d.date.slice(5), value: d.count })),
   );
 
-  /** 막대 길이는 최댓값 기준 비율 — 상위 항목이 100%가 된다. */
-  function ratio(count: number, rows: { count: number }[]): number {
-    const max = Math.max(...rows.map((r) => r.count), 1);
-    return (count / max) * 100;
+  /**
+   * 삭제 기준. 입력을 비우면 `null`이 들어오는데 그때 0으로 떨어뜨려 대상이 없게 만든다
+   * (NaN이 비교에 섞여 전부 대상이 되는 사고를 막는다).
+   */
+  const threshold = $derived(
+    Math.min(Math.max(Math.trunc(Number(pruneInput) || 0), 0), PRUNE_MAX_THRESHOLD),
+  );
+  /** 서버와 같은 기준(count <= threshold)을 화면에서 먼저 보여 준다. */
+  const pruneTargets = $derived((stats?.byVersion ?? []).filter((r) => r.count <= threshold));
+  const pruneRows = $derived(pruneTargets.reduce((sum, r) => sum + r.count, 0));
+
+  async function runPrune(): Promise<void> {
+    if (threshold < 1 || pruneTargets.length === 0) return;
+    pruning = true;
+    try {
+      const result = await api.pruneDownloads(threshold);
+      toasts.ok(
+        `버전 ${result.versions.length}개 · 기록 ${formatNumber(result.deletedRows)}건을 지웠습니다.`,
+      );
+      settingsOpen = false;
+      await load();
+    } catch (e) {
+      toasts.error(e);
+    } finally {
+      pruning = false;
+    }
   }
 
   /** machineId는 길어서 표를 밀어낸다. 앞부분만 보이고 전체는 툴팁으로 준다. */
@@ -53,9 +93,14 @@
   }
 </script>
 
-<header class="mb-5">
-  <h1 class="text-lg font-semibold text-ink">통계</h1>
-  <p class="mt-0.5 text-xs text-ink-faint">활성 사용자와 다운로드 이력</p>
+<header class="mb-5 flex items-start justify-between gap-4">
+  <div>
+    <h1 class="text-lg font-semibold text-ink">통계</h1>
+    <p class="mt-0.5 text-xs text-ink-faint">활성 사용자와 다운로드 이력</p>
+  </div>
+  <Button onclick={() => (settingsOpen = true)} disabled={!stats} title="통계 정리">
+    <Settings size={13} />설정
+  </Button>
 </header>
 
 {#if loading}
@@ -105,22 +150,7 @@
       {#if stats.activeByVersion.length === 0}
         <EmptyState title="활성 기록이 없습니다." />
       {:else}
-        <ul class="space-y-1.5">
-          {#each stats.activeByVersion as row (row.version)}
-            <li class="flex items-center gap-3 text-xs">
-              <span class="w-28 shrink-0 font-mono text-ink-muted">{row.version}</span>
-              <span class="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-3">
-                <span
-                  class="block h-full rounded-full bg-accent"
-                  style="width: {ratio(row.count, stats.activeByVersion)}%"
-                ></span>
-              </span>
-              <span class="w-14 shrink-0 text-right font-mono text-ink-muted">
-                {formatNumber(row.count)}
-              </span>
-            </li>
-          {/each}
-        </ul>
+        <VersionBars rows={stats.activeByVersion} />
       {/if}
     </Card>
 
@@ -131,22 +161,7 @@
           body="클라이언트가 machineId를 함께 보내면 집계됩니다."
         />
       {:else}
-        <ul class="space-y-1.5">
-          {#each stats.installsByVersion as row (row.version)}
-            <li class="flex items-center gap-3 text-xs">
-              <span class="w-28 shrink-0 font-mono text-ink-muted">{row.version}</span>
-              <span class="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-3">
-                <span
-                  class="block h-full rounded-full bg-ok"
-                  style="width: {ratio(row.count, stats.installsByVersion)}%"
-                ></span>
-              </span>
-              <span class="w-14 shrink-0 text-right font-mono text-ink-muted">
-                {formatNumber(row.count)}
-              </span>
-            </li>
-          {/each}
-        </ul>
+        <VersionBars rows={stats.installsByVersion} tone="ok" />
       {/if}
     </Card>
   </div>
@@ -247,26 +262,14 @@
   </Card>
 
   <div class="mt-4 grid gap-4 lg:grid-cols-2">
-    <Card title="버전별 다운로드">
+    <Card
+      title="버전별 다운로드"
+      subtitle={stats.byVersion.length > 0 ? `${stats.byVersion.length}개 버전` : undefined}
+    >
       {#if stats.byVersion.length === 0}
         <EmptyState title="기록이 없습니다." />
       {:else}
-        <ul class="space-y-1.5">
-          {#each stats.byVersion as row (row.version)}
-            <li class="flex items-center gap-3 text-xs">
-              <span class="w-28 shrink-0 font-mono text-ink-muted">{row.version}</span>
-              <span class="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-3">
-                <span
-                  class="block h-full rounded-full bg-accent"
-                  style="width: {ratio(row.count, stats.byVersion)}%"
-                ></span>
-              </span>
-              <span class="w-14 shrink-0 text-right font-mono text-ink-muted">
-                {formatNumber(row.count)}
-              </span>
-            </li>
-          {/each}
-        </ul>
+        <VersionBars rows={stats.byVersion} />
       {/if}
     </Card>
 
@@ -309,3 +312,71 @@
     </Card>
   </div>
 {/if}
+
+<!-- ─── 통계 정리 ──────────────────────────────────────────────────────────────
+     지운 대상을 미리 보여 주는 것이 이 팝업의 존재 이유다. 별도 확인 창을 겹치지
+     않고 목록 + danger 버튼으로 끝낸다. -->
+
+<Modal title="통계 정리" open={settingsOpen} onclose={() => (settingsOpen = false)}>
+  <div class="space-y-3">
+    <p class="text-xs whitespace-pre-line text-ink-faint">
+      {"다운로드 수가 기준 이하인 버전의 기록을 지웁니다.\n실사용자가 붙기 전에 직접 눌러 본 기록이 버전 목록을 채울 때 씁니다."}
+    </p>
+
+    <Field
+      label="기준 다운로드 수"
+      hint={`이 값 이하인 버전이 삭제 대상입니다. 최대 ${PRUNE_MAX_THRESHOLD}.`}
+    >
+      <input
+        type="number"
+        min="1"
+        max={PRUNE_MAX_THRESHOLD}
+        bind:value={pruneInput}
+        class="{INPUT_CLASS} font-mono"
+      />
+    </Field>
+
+    {#if pruneTargets.length === 0}
+      <p class="rounded-lg border border-line bg-surface-0 px-3 py-2 text-xs text-ink-faint">
+        {threshold < 1
+          ? "기준을 1 이상으로 입력하세요."
+          : `다운로드 ${threshold}건 이하인 버전이 없습니다.`}
+      </p>
+    {:else}
+      <div class="rounded-lg border border-line bg-surface-0">
+        <p class="border-b border-line px-3 py-2 text-xs text-ink-muted">
+          삭제 대상 {pruneTargets.length}개 버전 · 기록 {formatNumber(pruneRows)}건
+          <span class="text-ink-faint">
+            (남는 버전 {(stats?.byVersion.length ?? 0) - pruneTargets.length}개)
+          </span>
+        </p>
+        <ul class="max-h-48 space-y-1 overflow-y-auto p-2">
+          {#each pruneTargets as row (row.version)}
+            <li class="flex items-center justify-between gap-3 px-1 text-xs">
+              <span class="font-mono text-ink-muted">{row.version}</span>
+              <span class="font-mono text-danger">{formatNumber(row.count)}건</span>
+            </li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
+
+    <p class="text-xs whitespace-pre-line text-ink-faint">
+      {"되돌릴 수 없습니다. 활성 사용자·설치 버전 통계는 그대로 남습니다.\n지운 뒤 같은 PC가 그 버전을 다시 받으면 새로 1건으로 잡힙니다."}
+    </p>
+  </div>
+
+  {#snippet footer()}
+    <Button variant="ghost" onclick={() => (settingsOpen = false)}>취소</Button>
+    <Button
+      variant="danger"
+      loading={pruning}
+      disabled={pruneTargets.length === 0}
+      onclick={runPrune}
+    >
+      <Trash2 size={13} />{pruneTargets.length > 0
+        ? `${pruneTargets.length}개 버전 삭제`
+        : "삭제"}
+    </Button>
+  {/snippet}
+</Modal>

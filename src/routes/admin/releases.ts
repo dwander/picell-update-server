@@ -1,17 +1,19 @@
 import { Hono } from "hono";
 import {
+  DOWNLOAD_COUNT_MAX,
   ReleaseError,
   createRelease,
   type CreateReleaseInput,
   deleteRelease,
   listReleaseSummaries,
   requireReleaseRow,
+  setReleaseDownloadCount,
   toReleaseDTO,
   updateRelease,
 } from "../../services/releases.js";
 import { saveChangelog } from "../../services/changelog.js";
 import { logAction } from "../../services/audit.js";
-import { clientIp, handle, readJson, requireString } from "../helpers.js";
+import { clientIp, handle, readJson, requireInteger, requireString } from "../helpers.js";
 import {
   isChangelogType,
   isChannel,
@@ -88,6 +90,25 @@ releasesRouter.patch("/:id", (c) =>
       logAction(`release.${patch.status}`, release.version, null, clientIp(c));
     }
     return { release };
+  }),
+);
+
+/**
+ * PATCH /admin/api/releases/:id/downloads — 다운로드 수 보정.
+ * 통계 정리로 실수로 지운 기록을 숫자만 되살리는 도구다. 되돌리기 어려워 감사 로그에 남긴다.
+ */
+releasesRouter.patch("/:id/downloads", (c) =>
+  handle(c, async () => {
+    const body = await readJson<{ count?: unknown }>(c);
+    const count = requireInteger(body.count, "다운로드 수", { min: 0, max: DOWNLOAD_COUNT_MAX });
+    const result = setReleaseDownloadCount(c.req.param("id"), count);
+    logAction(
+      "release.downloads.adjust",
+      result.version,
+      { count: result.downloadCount, added: result.added, removed: result.removed },
+      clientIp(c),
+    );
+    return result;
   }),
 );
 

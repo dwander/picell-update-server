@@ -28,6 +28,9 @@
   const INPUT_CLASS =
     "w-full rounded-lg border border-line bg-surface-0 px-3 py-2 text-sm text-ink outline-none focus:border-accent";
 
+  /** 서버의 DOWNLOAD_COUNT_MAX와 같은 값 — 바꿀 때 함께 고칠 것. */
+  const DOWNLOAD_COUNT_MAX = 10000;
+
   let releases = $state<ReleaseSummaryDTO[]>([]);
   let loading = $state(true);
   let filter = $state<ReleaseStatus | "all">("all");
@@ -35,6 +38,11 @@
   let creating = $state(false);
   let busy = $state(false);
   let form = $state({ version: "", channel: "stable" as Channel, name: "" });
+
+  // 다운로드 수 보정 — 통계 정리로 실수로 지운 기록을 숫자만 되살린다.
+  let adjusting = $state<ReleaseSummaryDTO | null>(null);
+  let adjustInput = $state<number | null>(0);
+  let adjustBusy = $state(false);
 
   // 파일에서 유추한 값 — 만든 직후 그대로 업로드까지 이어가기 위해 파일을 들고 있는다.
   let pickedFile = $state<File | null>(null);
@@ -115,6 +123,36 @@
   const filtered = $derived(
     filter === "all" ? releases : releases.filter((r) => r.status === filter),
   );
+
+  function openAdjust(release: ReleaseSummaryDTO): void {
+    adjusting = release;
+    adjustInput = release.downloadCount;
+  }
+
+  /** 입력을 비우면 `null`이 들어온다 — 0으로 떨어뜨려 NaN이 비교에 섞이지 않게 한다. */
+  const adjustCount = $derived(
+    Math.min(Math.max(Math.trunc(Number(adjustInput) || 0), 0), DOWNLOAD_COUNT_MAX),
+  );
+  const adjustDiff = $derived(adjusting ? adjustCount - adjusting.downloadCount : 0);
+
+  async function saveAdjust(): Promise<void> {
+    if (!adjusting || adjustDiff === 0 || adjustBusy) return;
+    adjustBusy = true;
+    try {
+      const result = await api.setReleaseDownloadCount(adjusting.id, adjustCount);
+      const change =
+        result.added > 0
+          ? `${formatNumber(result.added)}건 되살림`
+          : `${formatNumber(result.removed)}건 삭제`;
+      toasts.ok(`${result.version}: ${change} → ${formatNumber(result.downloadCount)}건`);
+      adjusting = null;
+      await load();
+    } catch (e) {
+      toasts.error(e);
+    } finally {
+      adjustBusy = false;
+    }
+  }
 </script>
 
 <header class="mb-5 flex items-start justify-between gap-4">
@@ -196,8 +234,19 @@
               {r.artifactCount}
               <span class="text-ink-faint">· {formatBytes(r.totalBytes)}</span>
             </td>
-            <td class="px-4 py-2.5 text-right font-mono text-xs text-ink-muted">
-              {formatNumber(r.downloadCount)}
+            <td class="px-4 py-2.5 text-right">
+              <!-- 행 전체가 상세로 가는 링크라 클릭을 여기서 멈춘다. -->
+              <button
+                type="button"
+                title="다운로드 수 보정"
+                class="rounded-md px-1.5 py-0.5 font-mono text-xs text-ink-muted transition-colors hover:bg-surface-3 hover:text-ink"
+                onclick={(e) => {
+                  e.stopPropagation();
+                  openAdjust(r);
+                }}
+              >
+                {formatNumber(r.downloadCount)}
+              </button>
             </td>
             <td class="px-4 py-2.5 text-right text-xs text-ink-faint">
               {formatDate(r.publishedAt)}
@@ -258,6 +307,64 @@
   {#snippet footer()}
     <Button variant="ghost" onclick={() => (creating = false)}>취소</Button>
     <Button variant="primary" loading={busy} onclick={create}>만들기</Button>
+  {/snippet}
+</Modal>
+
+<!-- ─── 다운로드 수 보정 ────────────────────────────────────────────────────────
+     통계 정리로 지운 기록은 원래 값(PC·IP·시각)을 되살릴 방법이 없어 숫자만 맞춘다. -->
+
+<Modal title="다운로드 수 보정" open={adjusting !== null} onclose={() => (adjusting = null)}>
+  {#if adjusting}
+    <div class="space-y-3">
+      <p class="text-xs whitespace-pre-line text-ink-faint">
+        {"통계 정리로 지운 다운로드 기록을 숫자만 되살립니다.\n원래 기록의 PC·IP·시각은 복구할 수 없어, 릴리즈 발행일로 찍은 보정 행이 들어갑니다."}
+      </p>
+
+      <div class="rounded-lg border border-line bg-surface-0 px-3 py-2 text-xs">
+        <span class="font-mono text-ink">{adjusting.version}</span>
+        <span class="text-ink-faint">
+          · 현재 {formatNumber(adjusting.downloadCount)}건
+        </span>
+      </div>
+
+      <Field label="다운로드 수" hint="0 이상 {formatNumber(DOWNLOAD_COUNT_MAX)} 이하.">
+        <input
+          type="number"
+          min="0"
+          max={DOWNLOAD_COUNT_MAX}
+          bind:value={adjustInput}
+          class="{INPUT_CLASS} font-mono"
+        />
+      </Field>
+
+      <p class="rounded-lg border border-line bg-surface-0 px-3 py-2 text-xs whitespace-pre-line">
+        {#if adjustDiff > 0}
+          <span class="text-ok">보정 행 {formatNumber(adjustDiff)}개를 추가합니다.</span>
+          <span class="text-ink-faint">
+            {"\n일별 다운로드는 발행일에 잡히고, 고유 PC 수는 늘지 않습니다."}
+          </span>
+        {:else if adjustDiff < 0}
+          <span class="text-danger">기록 {formatNumber(-adjustDiff)}건을 지웁니다.</span>
+          <span class="text-ink-faint">
+            {"\n보정 행을 먼저 지우고, 그것으로 부족하면 실제 기록을 최근 것부터 지웁니다."}
+          </span>
+        {:else}
+          <span class="text-ink-faint">현재 값과 같아 바꿀 것이 없습니다.</span>
+        {/if}
+      </p>
+    </div>
+  {/if}
+
+  {#snippet footer()}
+    <Button variant="ghost" onclick={() => (adjusting = null)}>취소</Button>
+    <Button
+      variant={adjustDiff < 0 ? "danger" : "primary"}
+      loading={adjustBusy}
+      disabled={adjustDiff === 0}
+      onclick={saveAdjust}
+    >
+      {adjustDiff < 0 ? "지우고 맞추기" : "되살리기"}
+    </Button>
   {/snippet}
 </Modal>
 

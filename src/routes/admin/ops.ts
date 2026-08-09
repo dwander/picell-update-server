@@ -1,14 +1,20 @@
 // 운영 도구 — 통계, 스토리지 점검, GitHub 임포트, 감사 로그.
 
 import { Hono } from "hono";
-import { ACTIVITY_MACHINE_LIMIT, getActivity, getStats } from "../../services/stats.js";
+import {
+  ACTIVITY_MACHINE_LIMIT,
+  DOWNLOAD_PRUNE_MAX_THRESHOLD,
+  getActivity,
+  getStats,
+  pruneDownloadsByVersion,
+} from "../../services/stats.js";
 import { cleanupOrphans, storageOverview } from "../../services/storage-admin.js";
 import { bucketName, isStorageConfigured, storagePrefix } from "../../services/storage.js";
 import { githubConfig, importRelease, isGithubConfigured, previewImport } from "../../services/github.js";
 import { listAuditLogs, logAction, trimAuditLogs } from "../../services/audit.js";
 import { listChangelogTimeline } from "../../services/releases.js";
 import { ReleaseError } from "../../services/releases.js";
-import { clientIp, handle, readJson, requireString } from "../helpers.js";
+import { clientIp, handle, readJson, requireInteger, requireString } from "../helpers.js";
 import { isLocale } from "../../types.js";
 
 // 바꾸면 도구 페이지 "감사 로그" 카드의 설명 문구도 함께 고칠 것.
@@ -20,6 +26,28 @@ opsRouter.get("/stats", (c) => handle(c, () => getStats()));
 
 /** GET /admin/api/activity — 업데이트 확인 로그가 남은 PC 목록 (최근 확인 순) */
 opsRouter.get("/activity", (c) => handle(c, () => getActivity(ACTIVITY_MACHINE_LIMIT)));
+
+/**
+ * POST /admin/api/stats/downloads/prune — 다운로드 수가 적은 버전의 기록 삭제.
+ * 되돌릴 수 없으므로 감사 로그에 지운 버전을 남긴다.
+ */
+opsRouter.post("/stats/downloads/prune", (c) =>
+  handle(c, async () => {
+    const body = await readJson<{ maxCount?: unknown }>(c);
+    const maxCount = requireInteger(body.maxCount, "기준 다운로드 수", {
+      min: 1,
+      max: DOWNLOAD_PRUNE_MAX_THRESHOLD,
+    });
+    const result = pruneDownloadsByVersion(maxCount);
+    logAction(
+      "stats.prune",
+      `downloads<=${maxCount}`,
+      { versions: result.versions.map((v) => v.version), rows: result.deletedRows },
+      clientIp(c),
+    );
+    return result;
+  }),
+);
 
 /** GET /admin/api/changelog?locale=ko — 전체 릴리즈 노트 타임라인 */
 opsRouter.get("/changelog", (c) =>
