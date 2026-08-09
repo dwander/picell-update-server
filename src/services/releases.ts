@@ -435,6 +435,51 @@ export function pickArtifact(
   );
 }
 
+/**
+ * 발행된 릴리즈를 버전으로 찾는다. 채널은 따지지 않는다 — 버전을 콕 집어 요청했다면
+ * 그게 beta든 stable이든 그 릴리즈를 가리킨다. 초안·철회본(draft/archived)은 제외한다.
+ */
+export function findPublishedRowByVersion(version: string): ReleaseRow | null {
+  const row = getReleaseRowByVersion(normalizeVersion(version));
+  return row && row.status === "published" ? row : null;
+}
+
+/**
+ * 릴리즈에 포함된 파일을 **이름으로** 찾는다.
+ *
+ * 클라이언트가 임의의 파일명을 보내와도 후보는 그 릴리즈에 등록된 아티팩트 행뿐이고,
+ * 실제 다운로드에 쓰는 키는 DB의 `storageKey`다 — 요청 문자열이 키를 만들지 않으므로
+ * 경로 탈출·키 인젝션이 성립하지 않는다.
+ *
+ * 파일명 비교는 대소문자를 무시한다(같은 파일을 `App.pdb`/`app.pdb`로 부르는 관행).
+ * `platform`·`arch`는 **요구가 아니라 힌트**다. 같은 이름의 아티팩트가 플랫폼별로
+ * 여럿일 때만 좁히는 데 쓰고, 좁힌 결과가 비면 무시한다 — "릴리즈에 그 파일이 있으면
+ * 준다"가 이 조회의 규칙이기 때문이다.
+ */
+export function findArtifactByFileName(
+  releaseId: string,
+  fileName: string,
+  hint: { platform?: Platform | undefined; arch?: Arch | undefined } = {},
+): ArtifactRow | null {
+  const wanted = fileName.trim().toLowerCase();
+  if (!wanted) return null;
+
+  let rows = listArtifacts(releaseId).filter(
+    (a) => a.status === "ready" && a.fileName.toLowerCase() === wanted,
+  );
+  if (rows.length === 0) return null;
+
+  if (hint.platform) {
+    const narrowed = rows.filter((a) => a.platform === hint.platform);
+    if (narrowed.length > 0) rows = narrowed;
+  }
+  if (hint.arch) {
+    const narrowed = rows.filter((a) => a.arch === hint.arch);
+    if (narrowed.length > 0) rows = narrowed;
+  }
+  return rows[0] ?? null;
+}
+
 export interface MandatoryResolution {
   required: boolean;
   /** 강제 조건을 처음 건 릴리즈 버전. 클라이언트가 이유를 안내하는 데 쓴다. */

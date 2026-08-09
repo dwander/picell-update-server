@@ -112,11 +112,18 @@ function s3(): { client: S3Client; bucket: string } {
 
 // ─── URL ─────────────────────────────────────────────────────────────────────
 
-/** 공개 커스텀 도메인이 붙어 있으면 그 URL, 아니면 null(→ presigned GET 사용). */
+/**
+ * 공개 커스텀 도메인이 붙어 있으면 그 URL, 아니면 null(→ presigned GET 사용).
+ *
+ * 키의 각 세그먼트는 URL 인코딩한다. 파일명에 공백이 있으면(`PiCell One.pdb`) 날것
+ * 그대로는 Location 헤더로 나갈 수 없는 URL이 된다 — presigned 쪽은 SDK가 알아서
+ * 인코딩하므로 이 경로만 어긋나 있었다.
+ */
 export function publicUrlFor(key: string): string | null {
   const base = optionalEnv("STORAGE_PUBLIC_BASE_URL");
   if (!base) return null;
-  return `${base.replace(/\/$/, "")}/${physicalKey(key)}`;
+  const path = physicalKey(key).split("/").map(encodeURIComponent).join("/");
+  return `${base.replace(/\/$/, "")}/${path}`;
 }
 
 export async function presignPut(key: string, contentType: string): Promise<string> {

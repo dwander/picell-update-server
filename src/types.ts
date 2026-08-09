@@ -152,6 +152,27 @@ export interface UpdateCheckResponse {
   } | null;
 }
 
+/** 릴리즈에 포함된 파일 하나. 클라이언트가 이름을 지정해 받을 수 있는 것만 나온다. */
+export interface ReleaseFileDTO {
+  fileName: string;
+  size: number;
+  sha256: string | null;
+  contentType: string;
+  platform: Platform;
+  arch: Arch;
+  kind: ArtifactKind;
+  /** 이 파일을 받는 경로 (`/update/files/…`) */
+  downloadUrl: string;
+}
+
+export interface ReleaseFilesResponse {
+  version: string;
+  channel: Channel;
+  name: string;
+  publishedAt: string | null;
+  files: ReleaseFileDTO[];
+}
+
 export interface ChangelogFeedEntry {
   version: string;
   channel: Channel;

@@ -186,6 +186,42 @@ R2로 302 리다이렉트합니다. `STORAGE_PUBLIC_BASE_URL`이 있으면 그 �
 | `machineId` | 제공 시 같은 버전에 대해 최초 1회만 카운트 |
 | `version` | 특정 버전 고정 다운로드(구버전 재설치·롤백). 발행된 릴리즈만 대상 |
 
+### `GET /update/files` · `GET /update/files/:fileName`
+
+**릴리즈에 올려둔 파일을 이름으로 지정해 받습니다.** 확장자를 가리지 않으므로
+디버그 심볼(`.pdb`)이든 부가 리소스든, 그 릴리즈의 아티팩트로 등록돼 있으면 받을 수 있습니다.
+서버가 확장자별 규칙을 따로 두지 않는 이유는 **화이트리스트가 곧 "그 릴리즈의 아티팩트 목록"** 이기 때문입니다 —
+목록에 없는 이름은 404이고, 실제 R2 키는 언제나 DB 값이라 요청 문자열이 키를 만들지 못합니다(경로 탈출 불가).
+
+| 파라미터 | 설명 |
+|----------|------|
+| `version` | 대상 릴리즈. 생략하면 채널의 최신 발행본. 채널은 따지지 않는다(버전을 콕 집으면 그 릴리즈) |
+| `channel` | `version`이 없을 때만 의미 있음. `stable`(기본) \| `beta` |
+| `platform`·`arch` | **힌트**. 같은 이름의 파일이 플랫폼별로 여럿일 때만 좁히는 데 쓰고, 좁힌 결과가 비면 무시한다 |
+
+```
+GET /update/files?version=0.6.1
+{
+  "version": "0.6.1", "channel": "stable", "name": "PiCell One 0.6.1",
+  "publishedAt": "2026-08-08T22:31:19.000Z",
+  "files": [
+    { "fileName": "PiCell-One-0.6.1-Setup.exe", "size": 18814394, "sha256": "…",
+      "contentType": "application/x-msdownload", "platform": "windows", "arch": "x64",
+      "kind": "installer", "downloadUrl": "/update/files/PiCell-One-0.6.1-Setup.exe?version=0.6.1" },
+    { "fileName": "PiCell One.pdb", "size": 12345, "sha256": "…", "kind": "other", … }
+  ]
+}
+
+GET /update/files/PiCell%20One.pdb?version=0.6.1   → 302 (R2)
+```
+
+- **발행된 릴리즈만** 대상입니다(초안·철회본은 404).
+- 업로드가 끝난(`ready`) 아티팩트만 나옵니다.
+- 파일명 비교는 대소문자를 무시합니다. 파일명은 URL 인코딩해서 보내세요(공백 포함 가능).
+- **다운로드 통계에 남기지 않습니다.** `downloads`는 "이 버전을 받은 PC 수"를 세는 곳이라
+  심볼 파일 요청이 섞이면 숫자가 부풀고, (버전 × `machineId`) 중복 방지에 걸려
+  정작 설치본 다운로드가 집계에서 빠집니다.
+
 ### `GET /update/changelog`
 
 건너뛴 버전들의 변경점을 한 번에 보여줄 때 씁니다.

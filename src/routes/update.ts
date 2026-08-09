@@ -5,6 +5,8 @@
 import { Hono } from "hono";
 import { getChangelog } from "../services/changelog.js";
 import {
+  findArtifactByFileName,
+  findPublishedRowByVersion,
   listArtifacts,
   listPublishedRows,
   pickArtifact,
@@ -21,10 +23,12 @@ import {
   isLocale,
   isPlatform,
   type Arch,
+  type ArtifactKind,
   type Channel,
   type ChangelogFeedEntry,
   type Locale,
   type Platform,
+  type ReleaseFilesResponse,
   type UpdateCheckResponse,
 } from "../types.js";
 
@@ -187,11 +191,91 @@ updateRouter.get("/download/:platform", async (c) => {
 
 /** 특정 버전 고정 다운로드. 발행된 릴리즈만 대상(초안·철회본은 못 받는다). */
 function resolvePinned(version: string, platform: Platform, arch: Arch) {
-  const normalized = normalizeVersion(version);
-  const release = listPublishedRows("beta").find((r) => r.version === normalized);
+  const release = findPublishedRowByVersion(version);
   if (!release) return null;
   return { release, artifact: pickArtifact(listArtifacts(release.id), platform, arch) };
 }
+
+/**
+ * 파일 단위 조회·다운로드가 대상으로 삼을 릴리즈.
+ * `version`을 주면 그 버전(채널 무관), 없으면 채널의 최신 발행본.
+ */
+function resolveFileRelease(version: string | undefined, channel: Channel) {
+  return version ? findPublishedRowByVersion(version) : (listPublishedRows(channel)[0] ?? null);
+}
+
+function fileDownloadPath(version: string, fileName: string): string {
+  return `/update/files/${encodeURIComponent(fileName)}?version=${encodeURIComponent(version)}`;
+}
+
+/**
+ * GET /update/files?version=2.0.0&channel=
+ * 릴리즈에 포함된 파일 목록. 클라이언트가 무엇을 이름으로 요청할 수 있는지 알려준다
+ * (설치본 외 디버그 심볼·부가 파일까지 전부).
+ */
+updateRouter.get("/files", (c) => {
+  const channel = readChannel(c.req.query("channel"));
+  const release = resolveFileRelease(c.req.query("version"), channel);
+  if (!release) return c.json({ error: "Release not found" }, 404);
+
+  const response: ReleaseFilesResponse = {
+    version: release.version,
+    channel: release.channel as Channel,
+    name: release.name,
+    publishedAt: release.publishedAt?.toISOString() ?? null,
+    files: listArtifacts(release.id)
+      .filter((a) => a.status === "ready")
+      .map((a) => ({
+        fileName: a.fileName,
+        size: a.size,
+        sha256: a.sha256,
+        contentType: a.contentType,
+        platform: a.platform as Platform,
+        arch: a.arch as Arch,
+        kind: a.kind as ArtifactKind,
+        downloadUrl: fileDownloadPath(release.version, a.fileName),
+      })),
+  };
+  return c.json(response);
+});
+
+/**
+ * GET /update/files/:fileName?version=2.0.0&channel=&platform=&arch=
+ *
+ * 릴리즈에 **그 이름의 파일이 포함되어 있으면** R2로 302. 확장자를 따지지 않으므로
+ * 디버그 심볼(.pdb)이든 부가 리소스든 릴리즈에 올려둔 것은 그대로 받을 수 있다.
+ * 화이트리스트가 곧 "그 릴리즈의 아티팩트 목록"이라 별도 규칙을 둘 필요가 없다.
+ *
+ * 다운로드 통계에는 남기지 않는다. `downloads` 테이블은 "이 버전을 받은 PC 수"를
+ * 세는 곳인데, 심볼 파일 요청까지 섞이면 숫자가 부풀 뿐 아니라 (버전 × machineId)
+ * 중복 방지에 걸려 **정작 설치본 다운로드가 집계에서 빠진다.**
+ */
+updateRouter.get("/files/:fileName", async (c) => {
+  const fileName = c.req.param("fileName");
+  const channel = readChannel(c.req.query("channel"));
+  const platformParam = c.req.query("platform");
+  const archParam = c.req.query("arch");
+
+  if (!fileName.trim()) return c.json({ error: "Missing file name" }, 400);
+
+  const release = resolveFileRelease(c.req.query("version"), channel);
+  if (!release) return c.json({ error: "Release not found" }, 404);
+
+  const artifact = findArtifactByFileName(release.id, fileName, {
+    platform: isPlatform(platformParam) ? platformParam : undefined,
+    arch: isArch(archParam) ? archParam : undefined,
+  });
+  if (!artifact) {
+    return c.json({ error: "File not found in this release", version: release.version }, 404);
+  }
+
+  try {
+    return c.redirect(await downloadUrlFor(artifact.storageKey, artifact.fileName), 302);
+  } catch (e) {
+    console.error("Failed to serve file download:", e);
+    return c.json({ error: "Failed to resolve download" }, 502);
+  }
+});
 
 /**
  * GET /update/changelog?channel=&locale=&since=1.0.0&limit=20
