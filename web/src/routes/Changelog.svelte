@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Copy } from "lucide-svelte";
+  import { ChevronDown, Copy } from "lucide-svelte";
   import { api } from "../lib/api.js";
   import { navigate, router } from "../lib/router.svelte.js";
   import { toasts } from "../lib/ui.svelte.js";
@@ -46,6 +46,18 @@
   onMount(load);
 
   const visible = $derived(publishedOnly ? entries.filter((e) => e.status === "published") : entries);
+
+  // 노트가 길어 전부 펼치면 훑기 어렵다. 기본값은 "맨 위(최신) 한 장만 펼침"이고,
+  // 사용자가 직접 누른 카드만 여기 기록해 기본값을 덮는다. 목록이 바뀌어도
+  // (언어 전환·발행 필터) 손대지 않은 카드는 알아서 새 최신 버전을 따라간다.
+  let toggled = $state<Record<string, boolean>>({});
+  const autoOpenId = $derived(visible[0]?.id ?? null);
+
+  const isOpen = (id: string): boolean => toggled[id] ?? id === autoOpenId;
+
+  function toggle(id: string): void {
+    toggled[id] = !isOpen(id);
+  }
 
   /** CHANGELOG.md 형태로 통째 복사 — 릴리즈 노트를 다른 채널에 옮길 때 쓴다. */
   async function copyAll(): Promise<void> {
@@ -106,8 +118,23 @@
 {:else}
   <div class="space-y-3">
     {#each visible as entry (entry.id)}
+      {@const open = isOpen(entry.id)}
       <Card padded={false}>
-        <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1.5 border-b border-line px-4 py-3">
+        <div
+          class="flex flex-wrap items-baseline gap-x-3 gap-y-1.5 px-4 py-3 {open
+            ? 'border-b border-line'
+            : ''}"
+        >
+          <button
+            type="button"
+            title={open ? "접기" : "펼치기"}
+            aria-expanded={open}
+            aria-controls="changelog-{entry.id}"
+            onclick={() => toggle(entry.id)}
+            class="-my-1 self-center rounded-md p-1 text-ink-faint transition-colors hover:bg-surface-3 hover:text-ink"
+          >
+            <ChevronDown size={14} class="transition-transform {open ? '' : '-rotate-90'}" />
+          </button>
           <a
             href={router.href(`/releases/${entry.id}`)}
             onclick={(e) => navigate(e, `/releases/${entry.id}`)}
@@ -118,14 +145,19 @@
           <span class="flex flex-wrap gap-1.5">
             <ReleaseBadges channel={entry.channel} status={entry.status} />
           </span>
+          {#if !open && entry.changelog.summary}
+            <span class="min-w-0 truncate text-xs text-ink-faint">{entry.changelog.summary}</span>
+          {/if}
           <span class="ml-auto text-xs text-ink-faint">{formatDay(entry.publishedAt)}</span>
         </div>
-        <div class="px-4 py-3">
-          {#if entry.changelog.summary}
-            <p class="mb-2 text-sm font-medium text-ink">{entry.changelog.summary}</p>
-          {/if}
-          <Markdown source={entry.changelog.rendered} empty="릴리즈 노트가 작성되지 않았습니다." />
-        </div>
+        {#if open}
+          <div id="changelog-{entry.id}" class="px-4 py-3">
+            {#if entry.changelog.summary}
+              <p class="mb-2 text-sm font-medium text-ink">{entry.changelog.summary}</p>
+            {/if}
+            <Markdown source={entry.changelog.rendered} empty="릴리즈 노트가 작성되지 않았습니다." />
+          </div>
+        {/if}
       </Card>
     {/each}
   </div>
