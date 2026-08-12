@@ -134,5 +134,14 @@ else
 fi
 
 # 어느 한쪽이 죽으면 전체를 내린다 (반쪽만 떠 있는 상태를 만들지 않는다).
-wait -n
-echo "✗ 프로세스 하나가 종료되어 전체를 내립니다." >&2
+# `wait -n`은 bash 4.3+ 전용이라 macOS 기본 bash(3.2)에서는 문법 오류로 죽고,
+# 그 즉시 EXIT 트랩이 방금 띄운 서버까지 내려버린다 — 폴링으로 대체한다.
+while :; do
+  for pid in "${PIDS[@]}"; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "✗ 프로세스 하나가 종료되어 전체를 내립니다." >&2
+      exit 1
+    fi
+  done
+  sleep 1
+done
