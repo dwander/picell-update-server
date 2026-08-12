@@ -58,8 +58,9 @@ export function detectPlatform(fileName: string): Platform | null {
   return PLATFORM_PATTERNS.find(([re]) => re.test(fileName))?.[1] ?? null;
 }
 
-export function detectArch(fileName: string): Arch {
-  return ARCH_PATTERNS.find(([re]) => re.test(fileName))?.[1] ?? "x64";
+/** 에셋 파일명 → 아키텍처. 토큰이 없으면 null(호출자가 기본값을 정한다). */
+export function detectArch(fileName: string): Arch | null {
+  return ARCH_PATTERNS.find(([re]) => re.test(fileName))?.[1] ?? null;
 }
 
 export function guessKind(fileName: string): ArtifactKind {
@@ -80,7 +81,8 @@ export interface InspectedFileName {
   /** 릴리즈 표시 이름 제안. 제품명이 없으면 null(서버 기본값에 맡긴다). */
   suggestedName: string | null;
   platform: Platform | null;
-  arch: Arch;
+  /** 파일명에 아키텍처 토큰이 없으면 null — 기본값 결정은 호출자 몫이다. */
+  arch: Arch | null;
   kind: ArtifactKind;
 }
 

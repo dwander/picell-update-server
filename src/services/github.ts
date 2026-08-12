@@ -117,7 +117,7 @@ export async function previewImport(): Promise<ImportPreviewEntry[]> {
           size: a.size,
           url: a.browser_download_url,
           platform: detectPlatform(a.name),
-          arch: detectArch(a.name),
+          arch: detectArch(a.name) ?? "x64",
         })),
       };
     });
@@ -185,7 +185,7 @@ export async function importRelease(tagName: string): Promise<ImportResult> {
           url: asset.browser_download_url,
           fileName: asset.name,
           platform,
-          arch: detectArch(asset.name),
+          arch: detectArch(asset.name) ?? "x64",
         },
         assetHeaders(),
       );

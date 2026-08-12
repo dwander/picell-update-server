@@ -275,7 +275,7 @@
         <p class="truncate font-mono text-xs text-ink">{pickedFile.name}</p>
         <p class="mt-1 text-xs text-ink-faint">
           {inspected.version
-            ? `${inspected.platform ?? "플랫폼 불명"} · ${inspected.arch} · ${inspected.kind}`
+            ? `${inspected.platform ?? "플랫폼 불명"} · ${inspected.arch ?? "x64"} · ${inspected.kind}`
             : "버전을 찾지 못했습니다"}
         </p>
       {:else}

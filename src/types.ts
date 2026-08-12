@@ -291,7 +291,8 @@ export interface InspectedFileNameDTO {
   productName: string | null;
   suggestedName: string | null;
   platform: Platform | null;
-  arch: Arch;
+  /** 파일명에 아키텍처 토큰이 없으면 null */
+  arch: Arch | null;
   kind: ArtifactKind;
   /** 같은 버전의 릴리즈가 이미 있으면 그 id */
   existingReleaseId: string | null;

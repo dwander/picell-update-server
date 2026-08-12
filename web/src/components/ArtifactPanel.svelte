@@ -30,9 +30,31 @@
   const INPUT_CLASS =
     "w-full rounded-lg border border-line bg-surface-0 px-3 py-2 text-sm text-ink outline-none focus:border-accent";
 
-  /** 업로드 대상 분류는 파일마다 묻지 않고 패널 상단에서 한 번 고른다. */
+  /**
+   * 패널 상단의 선택값은 **파일명에서 유추하지 못했을 때의 폴백**이다.
+   * .dmg를 기본값(windows)으로 올려 버리는 실수를 막기 위해, 업로드마다
+   * 서버 추론(inspectFileName)을 먼저 시도하고 성공한 값을 우선한다.
+   */
   let platform = $state<Platform>("windows");
   let arch = $state<Arch>("x64");
+
+  /**
+   * 파일명에서 플랫폼·아키텍처를 유추한다. 추론 규칙은 서버(artifact-naming)에
+   * 한 벌만 두므로(규칙 6) 여기서는 결과만 받고, 실패하면 패널 선택값으로 진행한다.
+   */
+  async function classify(fileName: string): Promise<{ platform: Platform; arch: Arch }> {
+    if (!fileName) return { platform, arch };
+    try {
+      const inspected = await api.inspectFileName(fileName);
+      return {
+        platform: inspected.platform ?? platform,
+        arch: inspected.arch ?? arch,
+      };
+    } catch {
+      // 추론 실패가 업로드를 막을 이유는 아니다.
+      return { platform, arch };
+    }
+  }
 
   let dragging = $state(false);
   interface UploadTask {
@@ -67,10 +89,11 @@
     const update = (patch: Partial<UploadTask>): void => patchUpload(id, patch);
 
     try {
+      const detected = await classify(file.name);
       const { artifactId, uploadUrl } = await api.presignUpload(releaseId, {
         fileName: file.name,
-        platform,
-        arch,
+        platform: detected.platform,
+        arch: detected.arch,
         contentType: file.type || "application/octet-stream",
         size: file.size,
       });
@@ -106,14 +129,24 @@
     void handleFiles(e.dataTransfer?.files ?? null);
   }
 
+  /** URL 경로의 마지막 조각 — 분류 추론용. 못 뽑으면 빈 문자열(폴백으로 진행). */
+  function fileNameFromUrl(url: string): string {
+    try {
+      return decodeURIComponent(new URL(url).pathname.split("/").pop() ?? "");
+    } catch {
+      return "";
+    }
+  }
+
   async function runImport(): Promise<void> {
     if (!importUrl.trim() || importBusy) return;
     importBusy = true;
     try {
+      const detected = await classify(fileNameFromUrl(importUrl.trim()));
       const { artifact } = await api.importArtifactUrl(releaseId, {
         url: importUrl.trim(),
-        platform,
-        arch,
+        platform: detected.platform,
+        arch: detected.arch,
       });
       toasts.ok(`${artifact.fileName}을(를) R2로 가져왔습니다.`);
       importing = false;
@@ -233,7 +266,8 @@
 >
   <p class="text-xs text-ink-faint">
     {#if storageConfigured}
-      여기에 설치 파일을 끌어다 놓으면 위에서 고른 플랫폼·아키텍처로 R2에 업로드됩니다.
+      여기에 설치 파일을 끌어다 놓으면 R2에 업로드됩니다. 플랫폼·아키텍처는 파일명에서
+      유추하고, 유추하지 못하면 위에서 고른 값으로 분류합니다.
     {:else}
       STORAGE_* 환경변수가 설정되지 않아 업로드할 수 없습니다.
     {/if}
@@ -345,7 +379,7 @@
       <input bind:value={importUrl} placeholder="https://…" class="{INPUT_CLASS} font-mono text-xs" />
     </Field>
     <p class="text-xs text-ink-faint">
-      분류: {platform} · {arch}
+      분류는 파일명에서 유추하며, 유추하지 못하면 {platform} · {arch}로 분류합니다.
     </p>
   </div>
   {#snippet footer()}
