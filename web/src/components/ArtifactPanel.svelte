@@ -151,6 +151,26 @@
     void uploadFile(handoff.file);
   });
 
+  async function copyDownloadLink(artifact: ArtifactDTO): Promise<void> {
+    try {
+      const { url, expiresInSec } = await api.artifactDownloadUrl(artifact.id);
+      try {
+        await navigator.clipboard.writeText(url);
+      } catch {
+        // 클립보드 접근이 막힌 환경(비보안 컨텍스트 등)에서는 직접 복사하게 보여준다.
+        window.prompt("아래 링크를 복사하세요.", url);
+        return;
+      }
+      toasts.ok(
+        expiresInSec === null
+          ? "다운로드 링크를 복사했습니다."
+          : `다운로드 링크를 복사했습니다 (${Math.round(expiresInSec / 60)}분간 유효).`,
+      );
+    } catch (e) {
+      toasts.error(e);
+    }
+  }
+
   async function verify(artifact: ArtifactDTO): Promise<void> {
     try {
       const result = await api.verifyArtifact(artifact.id);
@@ -291,6 +311,15 @@
           <td class="px-4 py-2.5">
             <div class="flex justify-end gap-1">
               <Button variant="ghost" onclick={() => verify(a)}>확인</Button>
+              <button
+                type="button"
+                aria-label="다운로드 링크 복사"
+                title="다운로드 링크 복사"
+                class="rounded-md p-1.5 text-ink-faint transition-colors hover:bg-surface-3 hover:text-ink"
+                onclick={() => copyDownloadLink(a)}
+              >
+                <Link2 size={13} />
+              </button>
               <button
                 type="button"
                 aria-label="아티팩트 삭제"

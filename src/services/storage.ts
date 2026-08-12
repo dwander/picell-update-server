@@ -29,7 +29,7 @@ import type { Arch, Platform } from "../types.js";
 /** presigned PUT 만료. 대용량 업로드가 끝날 만큼은 길어야 한다. */
 const PRESIGNED_PUT_TTL_SEC = numberEnv("STORAGE_PUT_TTL_SEC", 60 * 60);
 /** 다운로드 리다이렉트용 presigned GET 만료. 짧게 유지 — 링크 유출 창을 줄인다. */
-const PRESIGNED_GET_TTL_SEC = numberEnv("STORAGE_GET_TTL_SEC", 10 * 60);
+export const PRESIGNED_GET_TTL_SEC = numberEnv("STORAGE_GET_TTL_SEC", 10 * 60);
 const DELETE_BATCH_MAX = 1000; // S3 DeleteObjects 한 요청 상한
 
 export const ARTIFACT_ROOT = "releases";

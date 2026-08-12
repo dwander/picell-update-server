@@ -147,6 +147,9 @@ export const api = {
   updateArtifact: (id: string, input: { platform?: Platform; arch?: Arch; kind?: ArtifactKind }) =>
     patch<{ artifact: ArtifactDTO }>(`/artifacts/${id}`, input),
   verifyArtifact: (id: string) => get<{ ok: boolean; size: number }>(`/artifacts/${id}/verify`),
+  /** 공유용 다운로드 링크. 공개 도메인이면 만료 없음(expiresInSec=null), presigned면 만료 있음. */
+  artifactDownloadUrl: (id: string) =>
+    get<{ url: string; expiresInSec: number | null }>(`/artifacts/${id}/download-url`),
   deleteArtifact: (id: string) => del<{ deleted: boolean }>(`/artifacts/${id}`),
 
   // ─── 운영 ──────────────────────────────────────────────────────────────────

@@ -10,7 +10,12 @@ import {
 } from "../../services/artifacts.js";
 import { ReleaseError, requireReleaseRow } from "../../services/releases.js";
 import { verifyArtifact } from "../../services/storage-admin.js";
-import { isStorageConfigured } from "../../services/storage.js";
+import {
+  isStorageConfigured,
+  presignDownload,
+  publicUrlFor,
+  PRESIGNED_GET_TTL_SEC,
+} from "../../services/storage.js";
 import { logAction } from "../../services/audit.js";
 import { clientIp, handle, readJson, requireString } from "../helpers.js";
 import { isArch, isArtifactKind, isPlatform, type Arch, type ArtifactKind } from "../../types.js";
@@ -94,6 +99,24 @@ artifactsRouter.patch("/artifacts/:id", (c) =>
     if (isArch(body.arch)) patch.arch = body.arch;
     if (isArtifactKind(body.kind)) patch.kind = body.kind;
     return { artifact: updateArtifactMeta(c.req.param("id"), patch) };
+  }),
+);
+
+/**
+ * GET /admin/api/artifacts/:id/download-url — 파일 공유용 다운로드 링크 발급.
+ * 공개 도메인이 있으면 만료 없는 그 URL, 없으면 presigned GET(만료 있음)을 준다.
+ * 발행 전 릴리즈의 파일도 받아볼 수 있어야 하므로 릴리즈 상태는 따지지 않는다.
+ */
+artifactsRouter.get("/artifacts/:id/download-url", (c) =>
+  handle(c, async () => {
+    assertStorage();
+    const row = requireArtifactRow(c.req.param("id"));
+    const publicUrl = publicUrlFor(row.storageKey);
+    if (publicUrl) return { url: publicUrl, expiresInSec: null };
+    return {
+      url: await presignDownload(row.storageKey, row.fileName),
+      expiresInSec: PRESIGNED_GET_TTL_SEC,
+    };
   }),
 );
 
