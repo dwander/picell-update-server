@@ -495,13 +495,21 @@ export interface MandatoryResolution {
  * 그래서 (현재, 최신] 구간에 강제 조건을 건 릴리즈가 하나라도 있으면 강제로 본다.
  * **받는 파일은 여전히 최신본 하나**다 — 중간 버전을 거쳐 올라가지 않는다.
  *
- * 플랫폼은 따지지 않는다. "이 버전 미만은 지원하지 않는다"는 선언은 특정 플랫폼에
- * 빌드가 있었는지와 무관한 정책이기 때문이다.
+ * 구간 안쪽도 **`resolveLatest`와 같은 기준으로 릴리즈의 존재를 판정한다** — 그 플랫폼에
+ * 받을 아티팩트가 없는 릴리즈는 그 플랫폼에 존재하지 않는 것으로 친다. 예전에는 플랫폼을
+ * 따지지 않았는데(정책은 빌드 유무와 무관하다는 생각), 그러면 한쪽 OS 만 낸 릴리즈의 강제가
+ * **다음에 반대쪽 OS 빌드를 올리는 순간 되살아난다** — 상한이 올라가면서 건너뛴 릴리즈가
+ * 구간에 들어오기 때문이다. 받을 수도 없었던 버전을 근거로 강제되는 셈이라 규칙을 맞췄다.
+ *
+ * 그래서 "이 버전 미만 미지원" 을 전 플랫폼에 걸고 싶으면 **그 플랫폼에 실제로 나가는
+ * 릴리즈**에 `mandatory`/`minSupportedVersion` 을 건다.
  */
 export function resolveMandatory(
   channel: Channel,
   currentVersion: string,
   latestVersion: string,
+  platform: Platform,
+  arch: Arch,
 ): MandatoryResolution {
   const triggers = listPublishedRows(channel)
     .filter(
@@ -511,7 +519,9 @@ export function resolveMandatory(
         (r.mandatory ||
           (r.minSupportedVersion
             ? compareVersions(currentVersion, r.minSupportedVersion) < 0
-            : false)),
+            : false)) &&
+        // 아티팩트 조회는 DB 를 타므로 버전·플래그 검사를 통과한 소수 행에만 돌도록 마지막에 둔다.
+        pickArtifact(listArtifacts(r.id), platform, arch) !== null,
     )
     // 가장 낮은(먼저 조건을 건) 릴리즈를 근거로 남긴다.
     .sort((a, b) => compareVersions(a.version, b.version));

@@ -110,9 +110,10 @@ updateRouter.get("/check", (c) => {
   const inRollout = isInRollout(release.rolloutPercent, release.version, machineId);
   const changelog = getChangelog(release.id, locale);
 
-  // 최신본의 플래그만 보지 않고 (현재, 최신] 구간 전체를 본다.
+  // 최신본의 플래그만 보지 않고 (현재, 최신] 구간 전체를 본다. 그 플랫폼에 받을 게 없는
+  // 릴리즈는 구간 안에서도 존재하지 않는 것으로 친다(resolveLatest 와 같은 기준).
   const mandatoryInfo = newer
-    ? resolveMandatory(channel, currentVersion, release.version)
+    ? resolveMandatory(channel, currentVersion, release.version, platform, arch)
     : { required: false, since: null };
 
   // 단계적 배포에서 빠진 클라이언트에게도 릴리즈 정보 자체는 준다(`updateAvailable`만
