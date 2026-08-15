@@ -1,6 +1,7 @@
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -26,6 +27,12 @@ const app = new Hono();
 app.use("*", logger());
 
 // 클라이언트 공개 API
+//
+// 브라우저에서도 읽을 수 있어야 한다 — 소개/다운로드 사이트가 `/update/latest`와
+// `/update/changelog`를 fetch 로 가져와 버전과 릴리즈 노트를 표시한다. 여기 있는 것은
+// 전부 **공개 읽기 전용** 정보이고 쿠키·인증을 쓰지 않으므로 origin 을 열어 둔다.
+// 관리 콘솔 API(`/admin/api`)에는 붙이지 않는다.
+app.use("/update/*", cors({ origin: "*", allowMethods: ["GET", "HEAD", "OPTIONS"] }));
 app.route("/update", updateRouter);
 
 // 관리 콘솔 API — 로그인 라우터가 인증 미들웨어보다 먼저 걸려야 한다.
